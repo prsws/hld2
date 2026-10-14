@@ -17,7 +17,7 @@ class StatusController extends ApiControllerBase
 {
     private const SNAPSHOT_FILE = '/tmp/casadelta_dashboard_status.json';
     private const CONFIGD_TIMEOUT = 30;
-    private const BACKEND_ERROR = 'Host check could not be executed (backend timeout).';
+    private const BACKEND_ERROR = 'Host check could not be executed.';
 
     /**
      * GET /api/casadelta/status/get

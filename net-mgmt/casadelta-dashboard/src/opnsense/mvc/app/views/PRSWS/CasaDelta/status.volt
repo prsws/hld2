@@ -166,20 +166,22 @@
 
         function startCooldown(seconds) {
             const button = $('#cd-refresh');
+            const label = button.find('#cd-refresh-label');
             let left = seconds;
             if (cooldownTimer !== null) {
                 clearInterval(cooldownTimer);
             }
             button.prop('disabled', true);
-            button.text(T.refresh + ' (' + left + ')');
+            label.text(T.refresh + ' (' + left + ')');
             cooldownTimer = setInterval(function () {
                 left -= 1;
                 if (left <= 0) {
                     clearInterval(cooldownTimer);
                     cooldownTimer = null;
-                    button.prop('disabled', false).text(T.refresh);
+                    button.prop('disabled', false);
+                    label.text(T.refresh);
                 } else {
-                    button.text(T.refresh + ' (' + left + ')');
+                    label.text(T.refresh + ' (' + left + ')');
                 }
             }, 1000);
         }
@@ -227,7 +229,7 @@
                 </h3>
                 <small id="cd-last-run" class="text-muted"></small>
                 <button id="cd-refresh" type="button" class="btn btn-default pull-right">
-                    <i class="fa fa-refresh fa-fw"></i> {{ lang._('Refresh now') }}
+                    <i class="fa fa-refresh fa-fw"></i> <span id="cd-refresh-label">{{ lang._('Refresh now') }}</span>
                 </button>
             </div>
         </div>
