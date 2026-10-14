@@ -1,0 +1,16 @@
+<acl>
+    <page-casadelta-status>
+        <name>Casa Delta: Host Status (View)</name>
+        <patterns>
+            <pattern>ui/casadelta/status*</pattern>
+            <pattern>api/casadelta/status/*</pattern>
+        </patterns>
+    </page-casadelta-status>
+    <page-casadelta-settings>
+        <name>Casa Delta: Host Settings (Manage)</name>
+        <patterns>
+            <pattern>ui/casadelta/settings*</pattern>
+            <pattern>api/casadelta/settings/*</pattern>
+        </patterns>
+    </page-casadelta-settings>
+</acl>

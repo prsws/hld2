@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# VM-verify: confirmed on the test VM (research.md, "VM-verify results") that the plugins Mk
+# framework runs this hook (same filename as security/crowdsec and security/wazuh-agent).
+# If a future release stops running it, switch to the documented pkg-deinstall mechanism.
+
+rm -f /tmp/casadelta_dashboard_status.json \
+    /tmp/casadelta_dashboard_status.json.tmp \
+    /tmp/casadelta_dashboard_check.lock
+
+exit 0

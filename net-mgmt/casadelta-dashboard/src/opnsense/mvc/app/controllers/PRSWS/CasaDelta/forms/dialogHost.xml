@@ -1,0 +1,38 @@
+<form>
+    <field>
+        <id>host.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Disabled hosts are kept in the list but are not checked and not shown on the status page.</help>
+    </field>
+    <field>
+        <id>host.name</id>
+        <label>Display name</label>
+        <type>text</type>
+        <help>Unique name shown on the status page (1-64 characters).</help>
+    </field>
+    <field>
+        <id>host.address</id>
+        <label>Address</label>
+        <type>text</type>
+        <help>IPv4, IPv6 or hostname, optionally with a port for reference only (the port is never probed). Examples: 192.168.1.10, 192.168.1.10:8006, pve.lan:8006, fe80::1, [2001:db8::1]:8006.</help>
+    </field>
+    <field>
+        <id>host.group</id>
+        <label>Group</label>
+        <type>text</type>
+        <help>Network, Nodes and Apps are shown first, in that order. Any other group follows, sorted A-Z.</help>
+    </field>
+    <field>
+        <id>host.sort_order</id>
+        <label>Sort order</label>
+        <type>text</type>
+        <help>Integer from -9999 to 9999 (default 0). Lower first, ties sorted by name.</help>
+    </field>
+    <field>
+        <id>host.description</id>
+        <label>Description</label>
+        <type>text</type>
+        <help>Optional note (up to 255 characters).</help>
+    </field>
+</form>

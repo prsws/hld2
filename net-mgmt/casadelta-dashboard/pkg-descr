@@ -1,0 +1,16 @@
+Casa Delta dashboard for OPNsense. Shows the live up/down status and latency of
+a configurable list of hosts, grouped and ordered, on a dedicated status page.
+Hosts are managed in the GUI and stored in the firewall configuration. Viewing
+status and managing hosts use separate privileges.
+
+Requires OPNsense 26.7 or later
+
+Plugin Changelog
+================
+
+0.1.0
+
+* Host status page with ICMP checks that run only while the page is viewed
+* Host settings page (add, edit, enable/disable, delete monitored hosts)
+* Separate privileges for viewing status and managing settings
+* Requires OPNsense 26.7 or later

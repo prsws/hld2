@@ -1,0 +1,47 @@
+<model>
+    <mount>//PRSWS/CasaDelta</mount>
+    <version>1.0.0</version>
+    <description>Casa Delta dashboard configuration</description>
+    <items>
+        <hosts>
+            <host type="ArrayField">
+                <enabled type="BooleanField">
+                    <Default>1</Default>
+                    <Required>Y</Required>
+                </enabled>
+                <name type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^\S(?:[^\p{C}]{0,62}\S)?$/u</Mask>
+                    <ValidationMessage>Display name must be 1–64 printable characters.</ValidationMessage>
+                    <Constraints>
+                        <check001>
+                            <ValidationMessage>A host with this display name already exists.</ValidationMessage>
+                            <type>UniqueConstraint</type>
+                        </check001>
+                    </Constraints>
+                </name>
+                <address type=".\HostAddressField">
+                    <Required>Y</Required>
+                </address>
+                <group type="TextField">
+                    <Required>Y</Required>
+                    <Default>Network</Default>
+                    <Mask>/^[A-Za-z0-9 _-]{1,32}$/</Mask>
+                    <ValidationMessage>Group must be 1–32 characters: letters, digits, space, - or _.</ValidationMessage>
+                </group>
+                <sort_order type="IntegerField">
+                    <Required>N</Required>
+                    <Default>0</Default>
+                    <MinimumValue>-9999</MinimumValue>
+                    <MaximumValue>9999</MaximumValue>
+                    <ValidationMessage>Sort order must be an integer between -9999 and 9999.</ValidationMessage>
+                </sort_order>
+                <description type="TextField">
+                    <Required>N</Required>
+                    <Mask>/^[^\p{C}]{0,255}$/u</Mask>
+                    <ValidationMessage>Description must be at most 255 characters.</ValidationMessage>
+                </description>
+            </host>
+        </hosts>
+    </items>
+</model>

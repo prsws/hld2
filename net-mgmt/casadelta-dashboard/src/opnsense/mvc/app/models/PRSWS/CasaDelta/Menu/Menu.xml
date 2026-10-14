@@ -1,0 +1,6 @@
+<menu>
+    <CasaDelta VisibleName="Casa Delta" cssClass="fa fa-heartbeat">
+        <HostStatus VisibleName="Host Status" url="/ui/casadelta/status"/>
+        <HostSettings VisibleName="Host Settings" url="/ui/casadelta/settings"/>
+    </CasaDelta>
+</menu>

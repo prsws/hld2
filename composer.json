@@ -1,0 +1,13 @@
+{
+    "name": "prsws/casadelta-dashboard-dev",
+    "description": "Development tooling for the Casa Delta OPNsense plugin (never shipped)",
+    "type": "project",
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "PRSWS\\CasaDelta\\Lib\\": "net-mgmt/casadelta-dashboard/src/opnsense/mvc/app/library/PRSWS/CasaDelta/Lib/"
+        }
+    }
+}
