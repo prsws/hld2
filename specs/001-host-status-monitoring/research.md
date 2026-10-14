@@ -283,3 +283,13 @@ implementation task (Principle VIII). If one turns out wrong, the stated fallbac
 ---
 
 All Technical Context unknowns are resolved. No `NEEDS CLARIFICATION` items remain.
+
+## VM-verify results (2026-10-14, OPNsense 26.7.6 / FreeBSD 15.1-RELEASE-p4)
+
+- **R-10 (ICMP probing)**: `ping -c 2 -i 0.5 -W 1000 -t 3` is confirmed.
+  - Exit 0 means `up`, with a `round-trip min/avg/max/stddev` line.
+  - Exit 2 means no reply. The probe completes in about 2.1 s.
+  - Exit 68 with stderr `cannot resolve <name>: ...` means the name is unresolved (`cannot_resolve`).
+- **R-06 (CLI bootstrap)**: `require_once('script/load_phalcon.php')` plus `OPNsense\Core\Config::getInstance()->object()` works in a CLI script. No fallback is needed.
+- **R-13 (uninstall hook)**: The plugins Mk framework (`Mk/plugins.mk`, `PLUGIN_SCRIPTS`) handles the hook. The filename `+POST_DEINSTALL.post` is confirmed by existing plugins `security/crowdsec` and `security/wazuh-agent`. No change to T006.
+- **R-01 (packaging and migrations)**: `plugins.mk` runs model migrations for every `models/<vendor>/<module>` directory, so `PRSWS/CasaDelta` needs no special handling.

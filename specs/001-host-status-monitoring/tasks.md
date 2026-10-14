@@ -50,6 +50,16 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 
 ---
 
+## Phase 1b: Test-VM spike
+
+**Purpose**: Confirm OPNsense 26.7 assumptions on the test VM before any script depends on them. Must finish before T024.
+
+- [x] T041 Verify the VM-verify assumptions from research.md (ping `-W` units and exit code 68, the MVC bootstrap include for CLI scripts, `+POST_DEINSTALL.post` execution). Also run a hello-world CLI script on the VM that does `require_once('script/load_phalcon.php');` and reads `//PRSWS/CasaDelta`, and record whether it loads the model and reads the node and update `specs/001-host-status-monitoring/research.md` with the confirmed outcome or the fallback actually used
+
+**Checkpoint**: Assumptions confirmed or fallbacks chosen. T024 may start.
+
+---
+
 ## Phase 2: Foundational (Blocking Prerequisites)
 
 **Purpose**: The main model, the menu and the privilege definitions that every story needs. No story work starts before this phase is complete.
@@ -66,8 +76,8 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 - [ ] T009 [P] Create `APP/models/PRSWS/CasaDelta/ACL/ACL.xml` defining exactly two privileges (contracts/acl-menu.md): `page-casadelta-status` named "Casa Delta: Host Status (View)" with patterns `ui/casadelta/status*` and `api/casadelta/status/*`, and `page-casadelta-settings` named "Casa Delta: Host Settings (Manage)" with patterns `ui/casadelta/settings*` and `api/casadelta/settings/*`. Neither privilege may include the other's patterns
 - [ ] T010 [P] Create `APP/models/PRSWS/CasaDelta/Menu/Menu.xml` with a top-level "Casa Delta" section and two entries, "Host Status" (`/ui/casadelta/status`) and "Host Settings" (`/ui/casadelta/settings`), per contracts/acl-menu.md
 - [ ] T011 [P] Create `PLUGIN/service/conf/actions.d/actions_casadelta.conf` with the `[check_hosts]` action exactly as in contracts/configd-check-hosts.md (`command:/usr/local/opnsense/scripts/CasaDelta/check_hosts.php`, `parameters:%s`, `type:script_output`, `message:Casa Delta host status check`)
-- [ ] T012 [P] Create the address parser `APP/library/PRSWS/CasaDelta/Lib/HostAddress.php` implementing research R-04: `[v6]:port`; a bare IPv6 (two or more colons, no brackets) means no port (`fe80::1:8006` is an IPv6 address); `host:port` for IPv4 and hostnames; port 1–65535; attributes `raw`, `host`, `port`, `kind` (`ipv4`|`ipv6`|`hostname`) per data-model.md §2. Provide a static `parse(string): HostAddress` that throws or returns an error carrying the specific messages "Invalid IPv4 address.", "Port must be between 1 and 65535.", "IPv6 addresses with a port must use [addr]:port.", "Invalid hostname." No framework dependency
-- [ ] T013 Create unit test `tests/unit/HostAddressTest.php` covering every example row in data-model.md §2 (`192.168.1.1`, `192.168.1.10:8006`, `fe80::1`, `[2001:db8::1]:8006`, `pve.lan:8006`, rejected `192.168.1` and `pve.lan:0`) plus port 65535 accepted, 65536 rejected, and each error message above. Run it and confirm it passes against T012
+- [ ] T013 [P] Create unit test `tests/unit/HostAddressTest.php` (written first; it must fail before T012 exists). Cover every row of the "Validation matrix" table in `contracts/settings-api.md` (source of truth), asserting the exact accepted/rejected result and message for each row, plus every example in data-model.md §2 (`192.168.1.1`, `192.168.1.10:8006`, `fe80::1`, `[2001:db8::1]:8006`, `pve.lan:8006`, rejected `192.168.1` and `pve.lan:0`), plus port 65535 accepted and 65536 rejected. Confirm it fails, then passes once T012 is implemented
+- [ ] T012 Create the address parser `APP/library/PRSWS/CasaDelta/Lib/HostAddress.php` implementing research R-04: `[v6]:port`; a bare IPv6 (two or more colons, no brackets) means no port (`fe80::1:8006` is an IPv6 address); `host:port` for IPv4 and hostnames; port 1–65535; attributes `raw`, `host`, `port`, `kind` (`ipv4`|`ipv6`|`hostname`) per data-model.md §2. Provide a static `parse(string): HostAddress` that throws or returns an error carrying the specific message for every rejected row of the "Validation matrix" table in `contracts/settings-api.md`, which is the source of truth (currently: "Invalid IPv4 address.", "Port must be between 1 and 65535." including leading-zero ports such as `pve.lan:08006`, "Only IPv6 addresses may be bracketed.", "Invalid hostname.", "Enter a host, not a URL.", "IPv6 zone identifiers are not supported.", "Address is required."). Implement every message in that table, and re-read the table before finishing in case it changed. No framework dependency. Depends on T013
 - [ ] T014 Create the custom field type `APP/models/PRSWS/CasaDelta/FieldTypes/HostAddressField.php` (`namespace PRSWS\CasaDelta\FieldTypes`, extends `OPNsense\Base\FieldTypes\BaseField`) whose validator calls `PRSWS\CasaDelta\Lib\HostAddress` and returns the parser's error message as the validation message. Depends on T012
 
 **Checkpoint**: Model, field type, ACL, menu, configd action definition and address parser exist. User stories can start.
@@ -94,10 +104,10 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 - [ ] T021 [P] [US1] Implement `APP/library/PRSWS/CasaDelta/Lib/PingResultParser.php` per data-model.md §3 so T016 passes. Parse from an exit code, stdout and stderr passed in, with no process execution inside the class
 - [ ] T022 [P] [US1] Implement `APP/library/PRSWS/CasaDelta/Lib/SnapshotFreshness.php` per data-model.md §4 so T017 passes (55 s TTL, 5 s cooldown, fingerprint helper)
 - [ ] T023 [US1] Implement `APP/library/PRSWS/CasaDelta/Lib/StatusAssembler.php` per data-model.md §3, §5 and §6 and contracts/status-api.md so T018 passes. Depends on T020 and T022
-- [ ] T024 [US1] Implement the configd script `PLUGIN/scripts/CasaDelta/check_hosts.php` per contracts/configd-check-hosts.md and research R-05 to R-09:
-  - Load the model through the MVC bootstrap (`require_once('script/load_phalcon.php');`, VM-verify per R-05; fallback `OPNsense\Core\Config::getInstance()->object()` reading `//PRSWS/CasaDelta/hosts`) and read only enabled hosts. Read-only: never write `config.xml`.
+- [ ] T024 [US1] Implement the configd script `PLUGIN/scripts/CasaDelta/check_hosts.php` per contracts/configd-check-hosts.md and research R-06 to R-10:
+  - Load the model through the MVC bootstrap (`require_once('script/load_phalcon.php');`, VM-verify per R-06; fallback `OPNsense\Core\Config::getInstance()->object()` reading `//PRSWS/CasaDelta/hosts`) and read only enabled hosts. Read-only: never write `config.xml`.
   - Parse each address with `HostAddress` and probe `host` only (strip the port); `-4` / `-6` / no flag from `kind`.
-  - Exactly 2 probes per host: `ping -c 2 -W 1000 -t 3`, via `proc_open` with an argv array (no shell), SIGKILL at a 4 s per-process deadline, at most 16 parallel pings, 20 s whole-run cap (unfinished hosts reported `down` with "probe timed out").
+  - Exactly 2 probes per host using the exact ping command from research R-10, `/sbin/ping -c 2 -i 0.5 -W 1000 -t 3 [-4|-6] <target>`, via `proc_open` with an argv array (no shell), SIGKILL at a 4 s per-process deadline, at most 16 parallel pings, 20 s whole-run cap (unfinished hosts reported `down` with "probe timed out").
   - Take `flock` on `/tmp/casadelta_dashboard_check.lock`, re-check freshness and the 5 s global cooldown under the lock (argument `force` skips the freshness test but not the cooldown), write `/tmp/casadelta_dashboard_status.json` via a `.tmp` file and `rename()`.
   - Print one JSON document including `performed` and `retry_after_s` (not saved in the file). On internal failure print `{"schema":1,"ok":false,"error":"…","results":{…previous results…}}` and exit 0.
   - One syslog line per run (`casadelta-dashboard: checked N hosts in X ms`), no per-host lines. No daemon. Depends on T012, T021 and T022
@@ -129,7 +139,7 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 
 ### Tests for User Story 2
 
-- [ ] T029 [P] [US2] Create `tests/integration/settings_crud.sh` (curl + jq against the test VM). It asserts: `addHost` with valid data returns `result = "saved"` and a UUID; `searchHost` lists it; `getHost/{uuid}` returns the stored values and `getHost` with no UUID returns blank defaults (`enabled = 1`, `group = Network`, `sort_order = 0`); `setHost/{uuid}` updates it; `toggleHost/{uuid}/0` and `/1` flip `enabled`; duplicate `name` is rejected with "A host with this display name already exists."; invalid addresses are rejected with the specific messages for `192.168.1`, `pve.lan:0`, `pve.lan:65536` and `fe80::1:99999`; the valid forms `192.168.1.10:8006`, `pve.lan:8006` and `[2001:db8::1]:8006` are accepted; a missing `sort_order` is stored as `0`; `delHost/{uuid}` removes it. Clean up every host it creates
+- [ ] T029 [P] [US2] Create `tests/integration/settings_crud.sh` (curl + jq against the test VM). It asserts: `addHost` with valid data returns `result = "saved"` and a UUID; `searchHost` lists it; `getHost/{uuid}` returns the stored values and `getHost` with no UUID returns blank defaults (`enabled = 1`, `group = Network`, `sort_order = 0`); `setHost/{uuid}` updates it; `toggleHost/{uuid}/0` and `/1` flip `enabled`; duplicate `name` is rejected with "A host with this display name already exists."; invalid addresses are rejected with the specific messages for `192.168.1`, `pve.lan:0`, `pve.lan:65536` and `pve.lan:08006` (leading-zero port); the valid forms `192.168.1.10:8006`, `pve.lan:8006` and `[2001:db8::1]:8006` are accepted; a missing `sort_order` is stored as `0`; `delHost/{uuid}` removes it. Clean up every host it creates
 
 ### Implementation for User Story 2
 
@@ -169,7 +179,7 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 - [ ] T038 [P] Create `tests/integration/run.sh` that runs `status_api.sh`, `settings_crud.sh` and `acl_matrix.sh` in order against the test VM and exits non-zero on the first failure. It must refuse to run if the target URL matches a value in an optional `PRODUCTION_HOST` environment variable (Principle VIII guard)
 - [ ] T039 Verify the resource guarantees in contracts/configd-check-hosts.md on the test VM with about 50 enabled hosts: a cold check finishes in about 5 s typically and never over 20 s, at most 16 parallel pings, no process remains after the run, CPU stays under 2 %, and 10 concurrent viewers cause at most one probe run per 60 s (SC-003–SC-005)
 - [ ] T040 Verify the failure paths on the test VM: stop or break `configd` (or make the script fail) and confirm the status page shows the warning banner with stale results and no host turns `down`. Verify an unresolvable hostname shows "cannot resolve", not "down" (FR-007, FR-014)
-- [ ] T041 Verify the VM-verify assumptions from research.md (ping `-W` units and exit code 68, the MVC bootstrap include for CLI scripts, `+POST_DEINSTALL.post` execution) and update `specs/001-host-status-monitoring/research.md` with the confirmed outcome or the fallback actually used
+> T041 (VM-verify assumptions) moved to Phase 1b: Test-VM spike.
 - [ ] T042 Run the full manual checklist M1–M17 from `specs/001-host-status-monitoring/quickstart.md` on the test VM, including M13 (works with LAN hosts and DNS down), M15 and M16 (configuration backup and restore) and M17 (after uninstall, only `<PRSWS><CasaDelta>` remains in `config.xml`). Record pass or fail per item
 - [ ] T043 Run a final Constitution Check against `.specify/memory/constitution.md` (Principles I–VIII): no standalone web root or edits to system files, read-only toward networking config, no CDN assets, no `.env` or secrets, separate privileges, no new libraries or build steps. Update the plan's Complexity Tracking only if a justified exception exists
 - [ ] T044 Build the release package with `make package` on the test VM, verify the package manifest contains only plugin files and no tests, `composer.json`, or `vendor/`, and only then hand the verified package over for production installation
@@ -181,6 +191,7 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 ### Phase Dependencies
 
 - **Setup (Phase 1)**: No dependencies. Start immediately
+- **Test-VM spike (Phase 1b)**: Depends on Setup. T041 must complete before T024
 - **Foundational (Phase 2)**: Depends on Setup. **Blocks all user stories**
 - **US1 (Phase 3)**: Depends on Foundational. Needs hosts in the model for a meaningful demo, seeded on the VM or added through US2
 - **US2 (Phase 4)**: Depends on Foundational only. Independent of US1
@@ -194,8 +205,8 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 
 ### Task-Level Dependencies
 
-- T013 depends on T012. T014 depends on T012
-- T023 depends on T020, T022. T024 depends on T012, T021, T022. T025 depends on T023, T024
+- T012 depends on T013 (tests first). T014 depends on T012
+- T023 depends on T020, T022. T024 depends on T012, T021, T022, T041. T025 depends on T023, T024
 - T027 depends on T025, T026. T028 depends on T019, T027
 - T031 depends on T007, T008, T014. T033 depends on T030, T031, T032. T034 depends on T029, T033
 - T037 depends on T035 and on US1 and US2 being installed
@@ -203,7 +214,7 @@ Fixed names (do not change): PHP vendor/module `PRSWS\CasaDelta`, main model `PR
 ### Parallel Opportunities
 
 - Setup: T002–T006 in parallel after T001
-- Foundational: T008, T009, T010, T011, T012 in parallel after T007
+- Foundational: T008, T009, T010, T011, T013 in parallel after T007. T012 follows T013
 - US1 tests T015–T019 in parallel. Library classes T020, T021, T022 in parallel. T026 in parallel with T024 and T025
 - US2: T029, T030 and T032 in parallel
 - US2 can be built in parallel with US1 by a second developer after Phase 2
