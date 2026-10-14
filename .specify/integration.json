@@ -2,10 +2,15 @@
   "version": "1.2.0",
   "integration_state_schema": 1,
   "installed_integrations": [
-    "junie"
+    "junie",
+    "hermes"
   ],
   "integration_settings": {
     "junie": {
+      "script": "sh",
+      "invoke_separator": "-"
+    },
+    "hermes": {
       "script": "sh",
       "invoke_separator": "-"
     }
