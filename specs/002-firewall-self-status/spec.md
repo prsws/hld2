@@ -122,7 +122,7 @@ As a Viewer, I want any single firewall value that cannot be read (such as CPU t
 - **SC-002**: A metric crossing a fixed warning threshold (memory used > 90%, disk used > 90%, 5-minute load average > core count) is visually distinguishable from normal values within the same refresh cycle — no manual refresh required; in the normal case, zero false-positive warnings occur (a highlight implies the threshold was actually crossed).
 - **SC-003**: On hardware without a CPU temperature sensor, 100% of page loads render the panel fully with no error, warning, or placeholder for temperature, and no console or page-level errors.
 - **SC-004**: With zero hosts configured and with all hosts down, the page is fully usable: the Firewall panel renders and updates in every case, and the host section degrades to the slice 001 empty/down state without affecting the panel.
-- **SC-005**: Each telemetry read uses only lightweight local reads, starts no external processes, and adds no measurable delay to the host status refresh.
+- **SC-005**: Each telemetry read uses only local sources on the firewall (short-lived local commands such as sysctl are acceptable), completes within the per-value timeout of FR-016, and adds no noticeable delay to the host status refresh.
 - **SC-006**: View-only accounts with the slice 001 dashboard view privilege can read the complete Firewall panel; accounts without that privilege get no access to it, and no configuration surface for the panel exists.
 
 ## Assumptions
