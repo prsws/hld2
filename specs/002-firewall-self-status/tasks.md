@@ -9,7 +9,7 @@ description: "Task list for Firewall Self-Status (002-firewall-self-status)"
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
-**Tests**: Included. Constitution Principle VIII requires automated tests plus a manual checklist on the test instance. Unit tests (PHPUnit) cover the framework-free library classes on the dev machine and are written **before** the code they test. Integration tests (`curl`/`jq`) and the manual checklist run against the **test instance only** (192.168.1.1), never production.
+**Tests**: Included. Constitution Principle VIII requires automated tests plus a manual checklist on the test instance. Unit tests (PHPUnit) cover the framework-free library classes on the dev machine and are written **before** the code they test. Integration tests (`curl`/`jq`) and the manual checklist run against the **test instance only** (opnsense2, 192.168.10.111), never production.
 
 **Organization**: Tasks are grouped by user story. US1 (P1) the Firewall panel with its values, US2 (P2) threshold warnings, US3 (P3) graceful degradation.
 
@@ -18,6 +18,13 @@ description: "Task list for Firewall Self-Status (002-firewall-self-status)"
 - **[P]**: Can run in parallel (different files, no dependency on an incomplete task)
 - **[Story]**: US1, US2 or US3. Setup, Foundational and Polish tasks carry no story label
 - Every task names exact file paths and the plan sections (R-xx), requirements (FR-xxx) and checklist items (Mxx) it implements
+
+## Environments
+
+- **Test instance**: `opnsense2`, **192.168.10.111** (VM 102 on pve1). OPNsense 26.7.7, KVM, 2 vCPU, 4 GB RAM, UFS root, web GUI on http port 80. Build tree `/usr/plugins` on the `stable/26.7` branch, repo clone in `/root/hld2`. Slice 001 (0.1.0) installed, with seeded test hosts (`/root/cd-seed-hosts.php`). Take a Proxmox snapshot of VM 102 before each install.
+  - It is a VM, so it has **no CPU temperature sensor**: the temperature row must be absent there (FR-007).
+  - `zfs.ko` is loaded although the root is UFS, so `kstat.zfs.misc.arcstats.size` is **present** (about 1 KB). The memory formula subtracts it harmlessly.
+- **Production firewall**: 192.168.1.1 (N6005, `coretemp` loaded). Used only for the read-only fixture capture (T004) and, at the end, for installing the verified package (T029). No development or test steps run there.
 
 ## Path Conventions
 
@@ -58,15 +65,15 @@ These close small gaps in the plan. They are binding for implementation; change 
 
 ## Phase 1b: Capture fixtures on the test instance
 
-**Purpose**: Unit tests parse real output, not invented output. Run on the **test instance (192.168.1.1) only**. Start `sh` first (the root shell is tcsh).
+**Purpose**: Unit tests parse real output, not invented output. Captured **read-only** on the production firewall (192.168.1.1), the only hardware with a temperature sensor; no change was made there. Start `sh` first (the root shell is tcsh).
 
-- [X] T004 On the test instance, capture into `tests/fixtures/firewall/`:
+- [X] T004 On the production firewall (192.168.1.1, read-only commands only), capture into `tests/fixtures/firewall/`:
   - `sysctl_call1_ufs.txt`: output of `/sbin/sysctl -i kern.hostname kern.boottime vm.loadavg hw.ncpu kern.cp_time hw.physmem hw.pagesize vm.stats.vm.v_page_count vm.stats.vm.v_free_count vm.stats.vm.v_inactive_count vm.stats.vm.v_laundry_count kstat.zfs.misc.arcstats.size` (record that the exit code is 0 and that the ARC line is absent)
   - `sysctl_call2.txt`: output of `/sbin/sysctl -i kern.cp_time dev.cpu.0.temperature dev.cpu.1.temperature dev.cpu.2.temperature dev.cpu.3.temperature`, taken about 0.5 s after call 1
   - `version_core.json`: contents of `/usr/local/opnsense/version/core`
   - `sysctl_call1_zfs.txt` (**synthetic**, marked in the README): the UFS capture with `v_free_count` lowered and one line `kstat.zfs.misc.arcstats.size: <bytes>` added, so that raw used memory is above 90% but used memory minus ARC is well below it (for the large-ARC test, Edge Case "Large ZFS cache")
   - `sysctl_call2_nosensor.txt` (**synthetic**): the call 2 capture with every `dev.cpu.N.temperature` line removed
-  - `sysctl_call2_mixed.txt` (**synthetic**): the call 2 capture with different per-core temperatures (all four cores read the same value on the test box), for the maximum test
+  - `sysctl_call2_mixed.txt` (**synthetic**): the call 2 capture with different per-core temperatures (all four cores read the same value on the production box), for the maximum test
 
 **Checkpoint**: Fixtures committed. Unit tests may start.
 
@@ -109,7 +116,7 @@ These close small gaps in the plan. They are binding for implementation; change 
   - the output keys are exactly those of the normal example in contracts/firewall-api.md, including `cpu_temperature` when `cpu_temperature_present` is `true`, `warnings` (an empty list for now) and `all_unavailable` (`false` for now)
 - [ ] T008 [P] [US1] Create `tests/integration/firewall_api.sh` using `tests/integration/lib.sh` (`require_tools`, `refuse_production`, `require_env OPN_VIEW_KEY OPN_VIEW_SECRET`). Assert, for both `GET /api/casadelta/status/get` and `POST /api/casadelta/status/refresh`:
   - a `firewall` object is present next to `summary` and `groups`, with every key of contracts/firewall-api.md
-  - `cpu_temperature` is present (this test box has `coretemp` loaded), `version` starts with `OPNsense `, `cpu_cores` ≥ 1
+  - on opnsense2 (a VM, no sensor) the `cpu_temperature` key is **absent** and `cpu_temperature_present` is `false`; if `OPN_EXPECT_TEMP=1` is set (hardware with `coretemp`), the key must be present instead. `version` starts with `OPNsense `, `cpu_cores` ≥ 1
   - `warnings` is a subset of `memory`, `disk`, `load` and names no metric whose value is `null`
   - two GETs at least 1 s apart return different `collected_at` values (fresh in-process read, quickstart §3)
   - the response text contains none of `/tmp`, `/usr`, `/sbin`, `sysctl` (no paths or raw output)
@@ -129,7 +136,7 @@ These close small gaps in the plan. They are binding for implementation; change 
   - formatting helpers: uptime as `Xd Xh Xm Xs` (days omitted when zero); `last_boot` and `collected_at` with `toLocaleString()` / `toLocaleTimeString()` (FR-003); load `0.31 / 0.48 / 0.52` (2 decimals); CPU `12.5%` (1 decimal); memory and disk as `1.1 GiB / 15.6 GiB (7%)` (binary units, 1 decimal)
   - every value inserted with `.text()`, never as HTML; new strings wrapped in `lang._()`; GUI-bundled assets only. Depends on T011
 - [ ] T013 [P] [US1] Add `firewall_api.sh` to the loop in `tests/integration/run.sh` (after `status_api.sh`) and update its header comment
-- [ ] T014 [US1] Run `vendor/bin/phpunit` on the dev machine (all slice 001 suites must still pass). Build and install 0.2.0 on the **test instance** (quickstart §2: `rm -rf work; make package` in `/usr/plugins/net-mgmt/casadelta-dashboard`, never `make clean`; `pkg add -f …`; clear `/usr/local/opnsense/mvc/app/cache/*.php` if the page looks stale), run `tests/integration/run.sh`, then walk M1, M3, M4, M5, M6, M12, M13 (privilege reuse, FR-014), M15 and M16. Confirm SC-001: the first `status/get` returns in under 3 s. Record the results. Never run against production
+- [ ] T014 [US1] Run `vendor/bin/phpunit` on the dev machine (all slice 001 suites must still pass). Take a Proxmox snapshot of VM 102, then build and install 0.2.0 on the **test instance** (quickstart §2: `git -C /root/hld2 pull`, copy `net-mgmt/casadelta-dashboard` into `/usr/plugins/net-mgmt/`, `rm -rf work; make package` there, never `make clean`; `pkg add -f …`; clear `/usr/local/opnsense/mvc/app/cache/*.php` if the page looks stale), run `tests/integration/run.sh`, then walk M1, M3, M4, M5, M6, M12, M13 (privilege reuse, FR-014), M15 and M16. Confirm SC-001: the first `status/get` returns in under 3 s. Record the results. Never run against production
 
 **Checkpoint**: The Firewall panel works on the test instance with real values. This is the MVP.
 
@@ -156,7 +163,7 @@ These close small gaps in the plan. They are binding for implementation; change 
 
 - [ ] T016 [US2] Implement the warning rules in `LIB/FirewallStatusAssembler.php` as fixed class constants (90, 90, core count) so T015 passes; no configuration (FR-009). Depends on T010 and T015
 - [ ] T017 [US2] Extend `APP/views/PRSWS/CasaDelta/status.volt`: for each of `memory`, `disk` and `load`, when the name is in `fw.warnings` add a `label label-warning` badge and a `cd-fw-warn` class (a tinted background defined in a small `<style>` block scoped to `#cd-firewall`); remove both when the name is absent. A cell showing "unavailable" is never highlighted (contracts/ui-firewall.md "Warning highlight"). Depends on T012 and T016
-- [ ] T018 [US2] On the **test instance**, rebuild and reinstall, then walk M7 (disk, using a large file in `/` that you delete afterwards), M8 (load, with a bounded `yes > /dev/null` per core) and M9 (memory). This box is UFS, so M9 exercises only the no-ARC path; the large-ARC case stays covered by T015 (R-12). Record the results
+- [ ] T018 [US2] On the **test instance**, rebuild and reinstall, then walk M7 (disk, using a large file in `/` that you delete afterwards), M8 (load, with a bounded `yes > /dev/null` per core) and M9 (memory, a bounded allocation). Take a Proxmox snapshot first. The ARC on opnsense2 is about 1 KB, so M9 exercises the near-no-ARC path; the large-ARC case stays covered by T015 (R-12). Record the results
 
 **Checkpoint**: US1 and US2 work together on the test instance.
 
@@ -198,7 +205,7 @@ These close small gaps in the plan. They are binding for implementation; change 
   - no `cpu_temperature` key → hide `#cd-fw-temp-row`; key present but `null` → "unavailable" (FR-007)
   - on a failed request keep the last rendered panel; the existing `poll()` already skips `render()` on failure, so confirm that and do not blank the panel. Depends on T017 and T022
 - [ ] T024 [P] [US3] Extend `tests/integration/firewall_api.sh` with an optional fault section that runs only when `OPN_SSH` (an ssh target for the **test instance**) is set, and prints a skip notice otherwise. It touches `/tmp/casadelta_dashboard_fault_version` and asserts `firewall.version = null` with the other values non-null, then `_fault_all` and asserts `all_unavailable = true` while `summary` and `groups` are still present. It removes the markers in a `trap` on exit. It refuses to run when `OPN_SSH` matches `PRODUCTION_HOST`
-- [ ] T025 [US3] On the **test instance**, rebuild and reinstall, then walk M2, M10, M11 and M14. Then verify FR-007 on real hardware: `kldunload coretemp`, reload the page and confirm the temperature row is **absent** with no error, then `kldload coretemp` and confirm it returns. Confirm no stale marker files remain in `/tmp`. Record the results
+- [ ] T025 [US3] On the **test instance**, rebuild and reinstall, then walk M2, M10, M11 and M14. opnsense2 has no temperature sensor, so M2 there confirms the row is **absent** with no error or placeholder (FR-007, SC-003). The sensor-present path is covered by T006 (real `coretemp` fixture) and is observed on production only after release. Confirm no stale marker files remain in `/tmp`. Record the results
 
 **Checkpoint**: All three stories work on the test instance.
 
@@ -276,6 +283,6 @@ Task: "T010 Create LIB/FirewallStatusAssembler.php"
 
 ### Rules That Apply to Every Task
 
-- Develop and test only on the test instance (192.168.1.1), never on the production firewall (Principle VIII)
+- Develop and test only on the test instance (opnsense2, 192.168.10.111), never on the production firewall (192.168.1.1) (Principle VIII)
 - Do not edit OPNsense system files or core web server config; add no third-party library or build step (Principles I and VII)
 - The plugin never writes firewall networking configuration (Principle II)

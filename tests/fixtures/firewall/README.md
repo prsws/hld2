@@ -2,7 +2,7 @@
 
 Used by `tests/unit/FirewallTelemetryReaderTest.php` and `FirewallStatusAssemblerTest.php` (tasks.md T004, T006, T015, T019).
 
-## Captured on the test instance (192.168.1.1), 2026-10-16
+## Captured read-only on the production firewall (192.168.1.1), 2026-10-16
 
 OPNsense 26.7.7, UFS root (`/dev/gpt/rootfs`), Intel Pentium Silver N6005 (4 cores), `coretemp` loaded. Both `sysctl` calls exited 0. Call 2 was taken 0.5 s after call 1.
 

@@ -54,7 +54,7 @@ reuses the slice 001 `page-casadelta-status` privilege; there is no new privileg
 
 **Testing**: PHPUnit (dev-only Composer dependency) for the two new library classes (the I/O-boundary reader, the pure assembler), including both a ZFS case (ARC present) and a UFS case (ARC absent). `curl`/`jq` contract tests against the test VM API. A manual checklist on the test VM (R-09, R-12, [quickstart.md](./quickstart.md)).
 
-**Target Platform**: OPNsense 26.7 on FreeBSD 15 (amd64). Baseline hardware is a 4-core Intel N6005. Minimum supported version: 26.7 (R-10, Technical Constraints). Sources verified on the test box: OPNsense 26.7.7, UFS root, `coretemp` loaded (R-03).
+**Target Platform**: OPNsense 26.7 on FreeBSD 15 (amd64). Baseline hardware is a 4-core Intel N6005. Minimum supported version: 26.7 (R-10, Technical Constraints). Sources verified read-only on the production firewall (OPNsense 26.7.7, UFS root, `coretemp` loaded); development and testing run on the opnsense2 test VM, 192.168.10.111 (R-03, R-12).
 
 **Project Type**: An OPNsense plugin (MVC web module) in an `opnsense/plugins`-style tree, extending the `os-casadelta-dashboard` package from slice 001 — **no new configd action or backend script in this slice**.
 
@@ -96,11 +96,11 @@ a Complexity Tracking entry. Design notes that refine the spec without contradic
   the first draft's 1-second `vmstat`/`top` sample and its parallel `proc_open` pool, keeping the
   whole read well within the SC-001/SC-005 budgets.
 - **Temperature source**: `dev.cpu.N.temperature` per core (max), read in the second `sysctl -i`
-  call; verified present on the test box
-  (`coretemp` loaded). `hw.acpi.thermal.*` is deliberately **not** used — it reports a bogus 0.1 °C on
+  call; verified present on the production firewall
+  (`coretemp` loaded); absent on the opnsense2 test VM. `hw.acpi.thermal.*` is deliberately **not** used — it reports a bogus 0.1 °C on
   this hardware (R-05).
-- **ARC term**: `kstat.zfs.misc.arcstats.size` exists only on ZFS installations; the test box has a UFS
-  root, so the ARC-present path is covered by unit tests only and remains the one VM-verify item (R-12).
+- **ARC term**: `kstat.zfs.misc.arcstats.size` is absent on the production firewall (UFS, no `zfs.ko`) and about 1 KB on the
+  opnsense2 test VM (`zfs.ko` loaded, no pool), so the ARC-present path is covered by unit tests only and remains the one VM-verify item (R-12).
 
 ## Project Structure
 

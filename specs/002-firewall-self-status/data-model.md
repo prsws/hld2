@@ -46,7 +46,7 @@ special case is temperature, where `null` can mean "OID absent" or "read failed"
 | `v_inactive_count`     | int\|null     | `vm.stats.vm.v_inactive_count` (pages, reclaimable).                  |
 | `v_laundry_count`      | int\|null     | `vm.stats.vm.v_laundry_count` (pages, reclaimable).                   |
 | `pagesize`             | int\|null     | `hw.pagesize` (bytes).                                                |
-| `memory_arc_bytes`     | int          | `kstat.zfs.misc.arcstats.size` **if the OID is present, else `0`** (absent on a UFS box). The only raw term normalized from *absence* to `0`, because ARC is an internal math term, not a displayed metric (R-03, R-04). |
+| `memory_arc_bytes`     | int          | `kstat.zfs.misc.arcstats.size` **if the OID is present, else `0`** (absent when `zfs.ko` is not loaded). The only raw term normalized from *absence* to `0`, because ARC is an internal math term, not a displayed metric (R-03, R-04). |
 | `disk_total`           | int\|null     | Bytes, `disk_total_space('/')`.                                       |
 | `disk_free`            | int\|null     | Bytes, `disk_free_space('/')`.                                        |
 | `cpu_temperature`      | float\|null | °C — the **max** of `dev.cpu.0.temperature` … `dev.cpu.(N−1).temperature` (e.g. `67.0C` → `67.0`); `null` if none present or unparseable. `hw.acpi.thermal.*` is never used (bogus 0.1 °C on this hardware, R-05). |

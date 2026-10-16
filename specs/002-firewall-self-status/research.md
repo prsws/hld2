@@ -53,7 +53,7 @@ slice's packaging, naming, language baseline and ACL (R-10).
   and it forced a 15 s parallel deadline and cross-check coupling into the API). A polling daemon
   (prohibited, FR-015). An SNMP/agent export (adds a dependency, violates FR-015).
 
-## R-03 The `sysctl -i` calls and their output (verified on the test box)
+## R-03 The `sysctl -i` calls and their output (verified read-only on the production firewall)
 
 - **Decision**: At most **two** bounded launches per read, **never in parallel**:
   1. one call with the full OID set:
@@ -81,7 +81,7 @@ slice's packaging, naming, language baseline and ACL (R-10).
   call-1 list is a fixed array; the call-2 list appends one `dev.cpu.<i>.temperature` entry per
   core — no user or network input enters argv, so command injection is impossible.
   - **VM-verify**: the exact `-i` behaviour on a **ZFS** install (all OIDs, including the ARC
-    one, present; exit 0) — the test box is UFS, so the ZFS path is unit-test-only for now (R-12).
+    one, present; exit 0) — neither the production firewall nor the opnsense2 test VM has a ZFS pool, so the ZFS path is unit-test-only for now (R-12).
     Fallback if `-i` on this FreeBSD differs: the parser is tolerant by design — unknown/skipped
     lines are ignored, so only a completely missing OID list would matter.
 - **Rationale**: One bounded call per read set is the cheapest correct way to get every
@@ -99,7 +99,7 @@ slice's packaging, naming, language baseline and ACL (R-10).
 
 ## R-04 Parsed value formats, the CPU delta, and memory math
 
-- **Decision** (verified on the test box, OPNsense 26.7.7, UFS root):
+- **Decision** (verified read-only on the production firewall, OPNsense 26.7.7, UFS root):
   - `kern.boottime` → `{ sec = N, usec = N } <date string>`; take **`sec`** as the boot Unix time.
   - `vm.loadavg` → `{ a b c }`; the three numbers are the 1/5/15-minute averages (R-08).
   - `kern.cp_time` → five tick counters in the order **user nice sys intr idle** (verified).
@@ -112,7 +112,7 @@ slice's packaging, naming, language baseline and ACL (R-10).
   - Memory (FR-005, verified): `memory_total = hw.physmem`;
     `memory_used = (v_page_count − v_free_count − v_inactive_count − v_laundry_count) ×
     hw.pagesize − ARC`, where `ARC = kstat.zfs.misc.arcstats.size` **if the OID is present, else 0**
-    (absent on the verified UFS box). Free/inactive/laundry are all *reclaimable*, so `used` is
+    (absent on the production box; present at about 1 KB on opnsense2, where `zfs.ko` is loaded without a pool — subtracting it is harmless). Free/inactive/laundry are all *reclaimable*, so `used` is
     memory not available to applications; `memory_used_percent = memory_used / memory_total × 100`,
     clamped to `0..100`. All seven OIDs are parsed from the same single `sysctl -i` output, so
     they are atomic with respect to each other — no torn mixed-source computation (R-03).
@@ -129,14 +129,14 @@ slice's packaging, naming, language baseline and ACL (R-10).
   only (rejected: over-counts used by the reclaimable pools, exactly the false-positive the spec's
   ZFS edge case forbids).
 
-## R-05 CPU temperature source (verified on the test box)
+## R-05 CPU temperature source (verified read-only on the production firewall)
 
 - **Decision**: `cpu_temperature = max(dev.cpu.0.temperature … dev.cpu.(N−1).temperature)` parsed
   from the **second** `sysctl -i` call's output (the per-core OIDs are requested there, R-03) —
   values like `67.0C`. `dev.cpu.N.temperature` exists when the
-  `coretemp` (or `k8temp`) kld is loaded, which it **is on the test box**; on the N6005 baseline it
-  reports real readings, so the row shows on the test box (M2 in [quickstart.md](./quickstart.md)
-  asserts the real reading). `hw.acpi.thermal.*` is **not** used — it reports a bogus 0.1 °C on
+  `coretemp` (or `k8temp`) kld is loaded, which it **is on the production firewall**; on the N6005 baseline it
+  reports real readings. The opnsense2 test VM has no sensor, so there the row is absent (M2 in
+  [quickstart.md](./quickstart.md)). `hw.acpi.thermal.*` is **not** used — it reports a bogus 0.1 °C on
   this hardware. If **no** `dev.cpu.N.temperature` OID is present in the output (kld not loaded),
   `cpu_temperature_present = false` and the value is **omitted entirely** — not "unavailable", not
   a warning, not a placeholder (FR-007, Edge Case: no sensor).
@@ -169,7 +169,7 @@ slice's packaging, naming, language baseline and ACL (R-10).
   rejected: it was sized for a multi-process read set that no longer exists). No deadline (violates
   FR-016).
 
-## R-07 Version and disk sources (verified on the test box)
+## R-07 Version and disk sources (verified read-only on the production firewall)
 
 - **Decision**:
   - `version`: parse `/usr/local/opnsense/version/core` — a small JSON file holding
@@ -293,16 +293,20 @@ slice's packaging, naming, language baseline and ACL (R-10).
 
 ## R-12 VM-verify list
 
-- **Verified on the test box** (OPNsense 26.7.7, UFS root, `coretemp` loaded):
+- **Verified read-only on the production firewall** (OPNsense 26.7.7, UFS root, `coretemp` loaded):
   - `kern.boottime` `{ sec = …, usec = … } <date>` shape; `vm.loadavg` `{ a b c }` shape; five
     counters in `kern.cp_time` in user/nice/sys/intr/idle order; `67.0C`-style
     `dev.cpu.N.temperature`; `hw.physmem` / `hw.pagesize` / the four `vm.stats.vm.v_*` OIDs all
     present and sane.
   - `/usr/local/opnsense/version/core` is JSON with `CORE_PRODUCT` / `CORE_VERSION`.
-  - `coretemp` is loaded → `dev.cpu.N.temperature` present (temperature row shows on the test box).
+  - `coretemp` is loaded → `dev.cpu.N.temperature` present (the temperature row shows there).
   - `hw.acpi.thermal.*` reports a bogus 0.1 °C — deliberately unused (R-05).
   - `kstat.zfs.misc.arcstats.size` is **absent** on this UFS box; `sysctl -i` skips it silently
     (exit 0).
+- **Observed on the opnsense2 test VM** (192.168.10.111, OPNsense 26.7.7, UFS root, KVM):
+  `zfs.ko` is loaded without any pool, so `kstat.zfs.misc.arcstats.size` is **present** (928 bytes);
+  "absent on UFS" therefore means "absent when `zfs.ko` is not loaded". No `dev.cpu.N.temperature`
+  and no `hw.acpi.thermal.*` (VM), so the temperature row is absent there.
 - **Unverified — VM-verify (ZFS install only)**: with a ZFS root the ARC OID is present and
   non-zero, and the ARC-subtracted memory figure matches the ARC visible in the system (Edge Case:
   large ZFS cache). This box runs UFS, so the **ZFS/ARC-present path remains unit-test-only** for

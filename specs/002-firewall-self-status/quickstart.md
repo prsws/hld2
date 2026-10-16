@@ -14,7 +14,7 @@ coverage.
 
 | Item | Requirement |
 |------|-------------|
-| Test VM | OPNsense 26.7 (FreeBSD 15), reachable from the dev machine at `$OPN_HOST`, with a snapshot taken before install. **Slice 001 already installed** (it provides the Host Status page, the `page-casadelta-status` privilege and the refresh cycle this slice extends). |
+| Test VM | `opnsense2`, 192.168.10.111 (VM 102 on pve1): OPNsense 26.7.7 (FreeBSD 15), 2 vCPU, 4 GB, UFS, no CPU temperature sensor, web GUI on http port 80. Reachable from the dev machine at `$OPN_HOST`, with a Proxmox snapshot taken before install. **Slice 001 already installed** (it provides the Host Status page, the `page-casadelta-status` privilege and the refresh cycle this slice extends). |
 | Build tree on VM | `git clone https://github.com/opnsense/plugins /usr/plugins`. Copy or rsync this repo's `net-mgmt/casadelta-dashboard/` to `/usr/plugins/net-mgmt/casadelta-dashboard/` |
 | Dev machine | PHP 8.2+ CLI, Composer, `curl`, `jq` |
 | Test users on VM | `cd-viewer` with only *Casa Delta: Host Status (View)* (`page-casadelta-status`), `cd-admin` with the settings privilege. Each has an API key. |
@@ -29,8 +29,8 @@ vendor/bin/phpunit --testsuite unit
 ```
 
 **Expected**: all tests pass, including the two new suites. `FirewallTelemetryReaderTest` covers
-the `sysctl -i` output parsing **by name** — every documented OID, a missing OID (the UFS box has
-no ARC OID) → absent value, a non-zero exit / timeout → all sysctl-sourced values `null`,
+the `sysctl -i` output parsing **by name** — every documented OID, a missing OID (the production
+box has no ARC OID) → absent value, a non-zero exit / timeout → all sysctl-sourced values `null`,
 malformed lines ignored, `kern.boottime` `{ sec = … }`, `vm.loadavg` `{ a b c }`, five-counter
 `kern.cp_time`, `67.0C` temperatures, the version JSON, a missing version file, and the disk
 built-ins. `FirewallStatusAssemblerTest` covers the CPU-delta math, the FR-005 memory definition
@@ -64,8 +64,8 @@ OPN_HOST=… OPN_VIEW_KEY=… OPN_VIEW_SECRET=… OPN_ADMIN_KEY=… OPN_ADMIN_SE
 
 **Expected**: all checks pass, including the new `firewall_api.sh`:
 - `GET /api/casadelta/status/get` and `POST .../refresh` both carry a `firewall` object matching
-  [firewall-api.md](./contracts/firewall-api.md) (every documented field present, temperature
-  present on this `coretemp` box).
+  [firewall-api.md](./contracts/firewall-api.md) (every documented field present; temperature
+  **absent** on opnsense2, which has no sensor).
 - `firewall` is present when `total_hosts = 0` and when all hosts are `down` (FR-017).
 - `warnings` is a subset of `{memory, disk, load}` and contains no metric whose value is `null`.
 - The `refresh` object keeps its slice 001 meaning (it describes the `check_hosts` run); repeated
@@ -80,7 +80,7 @@ Open **Casa Delta → Host Status**. Seed hosts as `cd-admin` (or root) as neede
 | # | Step | Expected outcome | Spec ref |
 |---|------|------------------|----------|
 | M1 | Open the Host Status page with hosts configured | A **Firewall** panel appears at the very top, above the summary line and all host groups, showing hostname, OPNsense version, uptime, last boot (local time), load (1/5/15), CPU %, memory used/total (with %), disk used/total (with %), and an "as of" time | US1-AS1, FR-001…FR-004 |
-| M2 | Note the temperature row | This test box has `coretemp` loaded, so the row is **present** with a real reading (max of `dev.cpu.N.temperature`). On a box where the kld is not loaded the row must be **absent** — no error, warning, or placeholder | US3-AS1, FR-007, SC-003 |
+| M2 | Note the temperature row | opnsense2 is a VM with no sensor, so the row must be **absent** — no error, warning, or placeholder. (On hardware with `coretemp`, such as production after release, it shows the max of `dev.cpu.N.temperature`.) | US3-AS1, FR-007, SC-003 |
 | M3 | With **zero** configured hosts (disable or delete all), reload the page | The Firewall panel renders in full at the top; the host area shows the slice 001 empty state; the panel keeps updating on the ~60 s cycle | US1-AS4, FR-017, SC-004 |
 | M4 | With **all hosts down**, reload | Firewall panel renders and updates normally; host rows show `down` (unchanged slice 001 behaviour) | US1-AS4, FR-017 |
 | M5 | Leave the page open, watch DevTools → Network | About one `status/get` call every 60 s; **both** the panel and the host rows update in the same response, in place, no full reload | US1-AS3, FR-010 |
