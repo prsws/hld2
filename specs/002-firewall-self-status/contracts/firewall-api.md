@@ -3,7 +3,7 @@
 **Controller**: `PRSWS\CasaDelta\Api\StatusController` (extends `OPNsense\Base\ApiControllerBase`)
 **Privilege**: `page-casadelta-status` (slice 001 [acl-menu.md](../../001-host-status-monitoring/contracts/acl-menu.md)) — **no new privilege**
 **Auth**: An OPNsense GUI session (CSRF token added by `ajaxCall`) or an API key/secret (HTTP Basic).
-**Data definitions**: [data-model.md](../data-model.md) §2–§4
+**Data definitions**: [data-model.md](../data-model.md) §2–§3
 
 This slice **extends** slice 001's status API. The existing `summary` and `groups` keys, the
 endpoint routes, the method checks and the host behaviour are **unchanged**. The only change is a
@@ -11,12 +11,16 @@ new top-level `firewall` key in the response body (see
 [contracts/status-api.md](../../001-host-status-monitoring/contracts/status-api.md) for the parts
 not repeated here).
 
-**Refresh mechanics (R-09)**: `buildStatus()` runs `check_hosts` and `check_firewall` in
-**parallel** through a bounded `proc_open` pool whenever the respective snapshot is stale or the
-request is forced. Each side is independently deduplicated by its own snapshot, so a request where
-both snapshots are fresh launches **no** process and returns both objects from cache. The firewall
-side has a 15 s wall-clock deadline; the hosts side keeps slice 001's 30 s budget. The response
-waits for both.
+**Telemetry read (R-02, R-06, R-11)**: `buildStatus()` performs the host part of its work
+**exactly as slice 001 does** (snapshot read, stale/forced decision, `check_hosts` via the
+unchanged path, 30 s budget) and then reads firewall telemetry **in-process** through
+`FirewallTelemetryReader` (R-02): bounded `/sbin/sysctl -i` calls — one for the full OID set and
+one short `kern.cp_time`-only delta call, each with a strict 2 s deadline and a ~500 ms gap
+between the two `cp_time` samples — plus in-process reads for the version, hostname
+and disk values (R-03…R-07). There is **no new configd action, no backend script, no snapshot file
+and no parallel `proc_open` pool** — the firewall object is freshly computed for every response,
+with a worst-case added latency of ~3 s, bounded (SC-005). The hosts side and the firewall side
+are independent: a firewall read failure never affects `summary`/`groups` and vice versa (FR-017).
 
 ---
 
@@ -98,9 +102,10 @@ user action.
 
 ## `POST /api/casadelta/status/refresh`
 
-Identical to slice 001, plus the same `firewall` key as above and the same `refresh` object
-(`performed`, `retry_after_s`). The forced refresh triggers `check_firewall force` in parallel with
-`check_hosts force`.
+Identical to slice 001 — the forced refresh triggers `check_hosts force` through the unchanged
+slice 001 path (no firewall configd action exists, R-02) — plus the `firewall` key as above,
+which is simply a fresh in-process read on every request. The `refresh` object
+(`performed`, `retry_after_s`) keeps its slice 001 meaning: it describes the **host check** run.
 
 ```json
 "refresh": { "performed": true, "retry_after_s": 5 }
@@ -115,11 +120,11 @@ Identical to slice 001, plus the same `firewall` key as above and the same `refr
   value is `null` (a highlight implies the threshold was actually crossed — SC-002).
 - `cpu_temperature` is present **only** when `cpu_temperature_present` is `true`; when that flag
   is `false` the field is omitted, never `null`, never "unavailable" (FR-007, SC-003).
-- `all_unavailable` is `true` **only** when every readable metric is `null` — this covers both a
-  run in which all readers failed and a backend read that failed to produce a value (crash,
-  timeout, non-JSON — FR-013 names "backend failure" as exactly this case). The view then shows a
-  single discreet notice and no individual highlights, and it clears automatically on the next
-  successful read.
+- `all_unavailable` is `true` **only** when every displayed metric is `null` — this covers a
+  `sysctl` call that timed out, exited non-zero, or returned no parsable OIDs, and a version file
+  or disk read that all failed in the same request (FR-013 names this "backend failure"; here the
+  "backend" is the in-process read, R-02). The view then shows a single discreet notice and no
+  individual highlights, and it clears automatically on the next successful read.
 - Timestamps (`last_boot`, `collected_at`) are ISO 8601 UTC; the view renders them in the viewer's
   local time (FR-003).
 - No field contains secrets, file paths or raw command output.
@@ -130,4 +135,4 @@ Identical to slice 001, plus the same `firewall` key as above and the same `refr
 |------------------------------------|---------------------------------------------------------------------|
 | No privilege                       | HTTP 403 (enforced by the OPNsense ACL layer, unchanged)            |
 | Method other than GET / refresh not POST | Rejected with `{"status":"failed"}`, unchanged              |
-| Backend firewall read failure (crash/timeout/non-JSON) | 200 with `all_unavailable = true` and all-null values; host `summary`/`groups` unaffected (FR-013, FR-017) |
+| In-process firewall read failure (`sysctl` timeout / non-zero exit, or every read `null`) | 200 with `all_unavailable = true` and all-null `firewall` values; host `summary`/`groups` unaffected (FR-013, FR-017) |

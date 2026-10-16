@@ -28,12 +28,16 @@ composer install            # dev-only: PHPUnit
 vendor/bin/phpunit --testsuite unit
 ```
 
-**Expected**: all tests pass, including the two new suites. `FirewallTelemetryTest` covers each
-raw reader's output → typed value or `null` (hostname, version, boot/uptime, load, cpu sample,
-memory terms, disk, sensors). `FirewallStatusAssemblerTest` covers the FR-005 memory definition
-(including a large-ARC case that must **not** warn), the three FR-008 warning rules (crossing and
-clearing, independently), the no-warning-when-`null` rule, the temperature omitted-vs-unavailable
-split (FR-007), and the `all_unavailable` logic (FR-013).
+**Expected**: all tests pass, including the two new suites. `FirewallTelemetryReaderTest` covers
+the `sysctl -i` output parsing **by name** — every documented OID, a missing OID (the UFS box has
+no ARC OID) → absent value, a non-zero exit / timeout → all sysctl-sourced values `null`,
+malformed lines ignored, `kern.boottime` `{ sec = … }`, `vm.loadavg` `{ a b c }`, five-counter
+`kern.cp_time`, `67.0C` temperatures, the version JSON, a missing version file, and the disk
+built-ins. `FirewallStatusAssemblerTest` covers the CPU-delta math, the FR-005 memory definition
+with a **ZFS case (ARC present)** and a **UFS case (ARC absent = 0)** — including a large-ARC case
+that must **not** warn — the three FR-008 warning rules (crossing and clearing, independently), the
+no-warning-when-`null` rule, the temperature omitted-vs-unavailable split (FR-007), and the
+`all_unavailable` logic (FR-013).
 
 ## 2. Build and install on the test VM
 
@@ -45,8 +49,8 @@ ssh root@$OPN_HOST 'cd /usr/plugins/net-mgmt/casadelta-dashboard && make package
 **Expected**:
 - **System → Firmware → Plugins** lists `os-casadelta-dashboard` at **0.2.0** with "Requires
   OPNsense 26.7 or later" and the new changelog entry.
-- `configctl casadelta check_firewall` prints JSON with `"schema":1` and a `firewall` object.
-- `configctl casadelta check_hosts` still works unchanged (no regression).
+- `configctl casadelta check_hosts` works unchanged (no regression); `actions_casadelta.conf`
+  still contains only the slice 001 `[check_hosts]` entry (no `check_firewall`).
 - `ps ax | grep -i casadelta` shows **no** new persistent process.
 
 ## 3. Automated integration tests (dev machine → test VM API)
@@ -60,12 +64,14 @@ OPN_HOST=… OPN_VIEW_KEY=… OPN_VIEW_SECRET=… OPN_ADMIN_KEY=… OPN_ADMIN_SE
 
 **Expected**: all checks pass, including the new `firewall_api.sh`:
 - `GET /api/casadelta/status/get` and `POST .../refresh` both carry a `firewall` object matching
-  [firewall-api.md](./contracts/firewall-api.md) (every documented field present).
+  [firewall-api.md](./contracts/firewall-api.md) (every documented field present, temperature
+  present on this `coretemp` box).
 - `firewall` is present when `total_hosts = 0` and when all hosts are `down` (FR-017).
 - `warnings` is a subset of `{memory, disk, load}` and contains no metric whose value is `null`.
-- The two refreshes within 5 s: the second returns `performed:false` (cooldown shared with hosts).
+- The `refresh` object keeps its slice 001 meaning (it describes the `check_hosts` run); repeated
+  `POST /refresh` within 5 s still return `performed:false` exactly as in slice 001, and the
+  `firewall` object is re-read in-process on each request (fresh `collected_at` each time).
 - The response does not expose file paths or raw command output.
-- A fresh snapshot returns unchanged `collected_at` across repeated `GET`s (deduplication).
 
 ## 4. Manual verification checklist (test VM GUI)
 
@@ -74,7 +80,7 @@ Open **Casa Delta → Host Status**. Seed hosts as `cd-admin` (or root) as neede
 | # | Step | Expected outcome | Spec ref |
 |---|------|------------------|----------|
 | M1 | Open the Host Status page with hosts configured | A **Firewall** panel appears at the very top, above the summary line and all host groups, showing hostname, OPNsense version, uptime, last boot (local time), load (1/5/15), CPU %, memory used/total (with %), disk used/total (with %), and an "as of" time | US1-AS1, FR-001…FR-004 |
-| M2 | Note the temperature row | Shown only if the appliance reports CPU temperature; on the test VM (likely a VM) the row is **absent**, with no error/warning/placeholder | US3-AS1, FR-007, SC-003 |
+| M2 | Note the temperature row | This test box has `coretemp` loaded, so the row is **present** with a real reading (max of `dev.cpu.N.temperature`). On a box where the kld is not loaded the row must be **absent** — no error, warning, or placeholder | US3-AS1, FR-007, SC-003 |
 | M3 | With **zero** configured hosts (disable or delete all), reload the page | The Firewall panel renders in full at the top; the host area shows the slice 001 empty state; the panel keeps updating on the ~60 s cycle | US1-AS4, FR-017, SC-004 |
 | M4 | With **all hosts down**, reload | Firewall panel renders and updates normally; host rows show `down` (unchanged slice 001 behaviour) | US1-AS4, FR-017 |
 | M5 | Leave the page open, watch DevTools → Network | About one `status/get` call every 60 s; **both** the panel and the host rows update in the same response, in place, no full reload | US1-AS3, FR-010 |
@@ -82,14 +88,14 @@ Open **Casa Delta → Host Status**. Seed hosts as `cd-admin` (or root) as neede
 | M7 | Push **disk** usage above 90% on the root disk (create a large file in `/`), wait one cycle, then delete it | On crossing, only the disk cell is highlighted as a warning; memory and all other values render normally. After the file is deleted, the highlight clears on the next cycle. No false-positive warnings in the meantime | US2-AS2, US2-AS4, FR-008, SC-002 |
 | M8 | Hold **sustained CPU load** above the core count (e.g. a bounded `yes > /dev/null` × cores for one cycle) | Only the load cell is highlighted; it clears when the load is released. Memory/disk unaffected | US2-AS3, FR-008 |
 | M9 | Temporarily exhaust available memory (bounded, e.g. a short-lived anonymous-allocate process) | The memory cell highlights only when **used** (the FR-005 definition, ARC excluded) exceeds 90%. A box that merely has a large ZFS ARC does **not** highlight | US2-AS1, FR-005, FR-008, Edge: large ZFS cache |
-| M10 | Make one reader fail (on the VM, `chmod 000` a telemetry source or simulate a hung reader) | Exactly that value shows "unavailable"; every other value renders with real data; no panel breakage; the highlight never applies to an unavailable value | US3-AS3, FR-012, Edge: highlight with unavailable |
-| M11 | Force **all** values unavailable (e.g. point the readers at a failing source / `chmod -x` the script) | The panel shows a single discreet "telemetry unavailable" notice with the heading and box intact; the host groups below remain fully functional; it recovers automatically on the next good cycle with no user action | US3-AS4, FR-013, FR-017 |
+| M10 | Enable the reader's test-only fault-injection switch for a single source (the version file; see R-09), then disable it | Exactly that value shows "unavailable"; every other value renders with real data; no panel breakage; the highlight never applies to an unavailable value | US3-AS3, FR-012, Edge: highlight with unavailable |
+| M11 | Force **all** values unavailable (enable the reader's test-only fault-injection switch for the whole read — R-09), then disable it | The panel shows a single discreet "telemetry unavailable" notice with the heading and box intact; the host groups below remain fully functional; it recovers automatically on the next good cycle with no user action | US3-AS4, FR-013, FR-017 |
 | M12 | Immediately after a VM reboot | Low uptime and reset load render normally, no special handling; `last_boot` reflects the new boot | Edge: freshly rebooted |
 | M13 | Log in as `cd-viewer` | The full Firewall panel is visible (it reuses `page-casadelta-status`). Log in as a user **without** that privilege: no access to the page or the `firewall` object. No settings surface exists for the panel | US3, SC-006, FR-014 |
-| M14 | Simulate a backend failure for the firewall read (`chmod -x firewall_status.php`), then restore | The Firewall panel degrades to the all-unavailable notice; the host groups are **unaffected** (parallel independence). Restore and it recovers | FR-016, FR-017, Principle II |
-| M15 | Watch `top -P` across a refresh where both checks run | No sustained CPU spike; the firewall read set completes in ~2 s and, running in parallel, adds no visible delay to the host refresh | SC-005, R-09, Principle II |
-| M16 | Reboot the VM, then open the page | The Firewall panel works after reboot; no `/tmp` state needed to be re-created (a read runs on demand) | Principle IV |
-| M17 | Uninstall the plugin (`pkg delete os-casadelta-dashboard`) | No package files remain. **Both** `/tmp/casadelta_dashboard_status*` and `/tmp/casadelta_dashboard_firewall*` are gone. Only the `<PRSWS><CasaDelta>` section remains in `/conf/config.xml` (unchanged from slice 001) | Principle I, R-12 |
+| M14 | Enable the reader's test-only fault-injection switch for the whole read (R-09), then disable it | The Firewall panel degrades to the all-unavailable notice; the host groups are **unaffected** (independent data paths). Disable it and it recovers on the next cycle | FR-017, R-09, Principle II |
+| M15 | Watch `top -P` across a refresh | No sustained CPU spike; the in-process firewall read (two bounded, serial `sysctl` calls plus a ~500 ms sample gap) completes in ~2–3 s and adds no visible delay to the host refresh | SC-005, R-06, Principle II |
+| M16 | Reboot the VM, then open the page | The Firewall panel works after reboot; every read runs on demand in-process and this slice keeps no `/tmp` state at all | Principle IV |
+| M17 | Uninstall the plugin (`pkg delete os-casadelta-dashboard`) | No package files remain. Slice 001's `/tmp/casadelta_dashboard_status*` files are removed by the existing hook; this slice creates **no** `/tmp` files, so nothing of it lingers. Only the `<PRSWS><CasaDelta>` section remains in `/conf/config.xml` (unchanged from slice 001) | Principle I, R-10 |
 
 Record the outcome of M1–M17 (pass/fail, with notes) in the release notes before any package is
 promoted to production.

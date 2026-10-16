@@ -40,8 +40,8 @@ and all hosts are `down` (FR-017) — in the zero-host case it is the primary co
 | Element | Behaviour |
 |---------|-----------|
 | Heading | Fixed text "Firewall". Always present; the panel is never removed from the DOM after first render. |
-| All-unavailable notice | When `all_unavailable` is `true` — a run in which every reader failed, or a backend read that
-  failed to produce a value (crash, timeout, non-JSON; FR-013): a single discreet inline notice
+| All-unavailable notice | When `all_unavailable` is `true` — an in-process read that failed to produce a value
+  (`sysctl` timeout, non-zero exit, or every read `null`; FR-013): a single discreet inline notice
   ("Firewall telemetry is currently unavailable.") replaces the value grid. The panel box and
   heading remain, and the host groups below are unaffected (FR-017). Clears automatically on the
   next successful read — no user action. |
@@ -62,9 +62,9 @@ and all hosts are `down` (FR-017) — in the zero-host case it is the primary co
   `render()` gains a step that updates the Firewall panel cells from `data.firewall`. There is **no
   new timer and no separate request**: the panel refreshes on the exact same ~60 s cycle and the
   same "Refresh now" button as the hosts (FR-010).
-- Because the API runs the two checks in parallel (R-09) and the firewall snapshot has the same
-  55 s TTL / 5 s cooldown as the hosts snapshot, both panels update in the same response, in sync
-  (US1-AS3).
+- Because the `firewall` object is freshly read in-process on every request (R-02) and the host
+  part of the response comes from slice 001's snapshot as usual, both panels update in the same
+  response (US1-AS3).
 - On a request failure (network/HTTP) the slice 001 banner shows and the last rendered panel is
   kept, exactly as the host rows are — the panel never blanks on a transient error.
 - Cell updates use the last rendered values as the baseline; a `null` in a new response changes
