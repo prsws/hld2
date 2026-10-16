@@ -50,7 +50,7 @@ call GET /api/casadelta/status/get "$VIEW_KEY" "$VIEW_SECRET"
 assert_eq "get returns HTTP 200" "200" "$CODE"
 assert_jq "response has summary and groups" '(.summary | type == "object") and (.groups | type == "array")'
 assert_jq "summary has all documented fields" \
-    '.summary | has("total_hosts","up_hosts","down_hosts","unresolved_hosts","pending_hosts","last_run","next_check_at","subsystem_status","subsystem_error")'
+    '[.summary | has("total_hosts","up_hosts","down_hosts","unresolved_hosts","pending_hosts","last_run","next_check_at","subsystem_status","subsystem_error")] | all'
 assert_jq "subsystem_status is ok" '.summary.subsystem_status == "ok"'
 FIRST_LAST_RUN="$(jqv '.summary.last_run')"
 
