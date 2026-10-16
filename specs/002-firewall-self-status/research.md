@@ -26,10 +26,12 @@ slice's packaging, naming, language baseline and ACL (R-10).
 
 ## R-02 Telemetry read in-process — no configd action, no script, no snapshot
 
-- **Decision**: A new **pure** library class `PRSWS\CasaDelta\Lib\FirewallTelemetryReader` reads
+- **Decision**: A new library class `PRSWS\CasaDelta\Lib\FirewallTelemetryReader` — the **I/O
+  boundary with an injectable command runner** — reads
   the appliance's own OS **in-process**, and `Api\StatusController::buildStatus()` calls it on
   every response: one bounded `/sbin/sysctl -i` call for the full OID set (argv array, no shell,
-  strict 2 s deadline, R-03) and a short `kern.cp_time`-only call for the CPU delta (R-04),
+  strict 1 s deadline, R-03) and a short `kern.cp_time` + per-core-temperature call for the CPU
+  delta and sensor readings (R-04, R-05),
   plus PHP built-ins — `gethostname()`, a `file_get_contents()` read of
   `/usr/local/opnsense/version/core`, and `disk_total_space('/')` / `disk_free_space('/')`
   (R-04…R-07). There is **no new configd action**, no backend script, no `/tmp` snapshot, no lock,
@@ -38,7 +40,7 @@ slice's packaging, naming, language baseline and ACL (R-10).
   this design**. The slice 001 `check_hosts` path (configd action, script, `/tmp` snapshot,
   `SnapshotFreshness` reuse, `StatusAssembler`) and the `check_hosts` part of
   `Api\StatusController::runCheck` are **exactly as they are** — not touched.
-- **Rationale**: The telemetry read is cheap (at most two ~2 s bounded calls plus in-process
+- **Rationale**: The telemetry read is cheap (at most two ~1 s bounded calls plus in-process
   reads, R-06)
   and read-only (Principle II), so there is no need for the deduplication machinery that slice 001
   needed for a long host probe run: a snapshot exists to make one expensive shared check serve many
@@ -60,20 +62,24 @@ slice's packaging, naming, language baseline and ACL (R-10).
   /sbin/sysctl -i kern.hostname kern.boottime vm.loadavg hw.ncpu kern.cp_time hw.physmem
                hw.pagesize vm.stats.vm.v_page_count vm.stats.vm.v_free_count
                vm.stats.vm.v_inactive_count vm.stats.vm.v_laundry_count
-               kstat.zfs.misc.arcstats.size dev.cpu.0.temperature … dev.cpu.(N−1).temperature
+               kstat.zfs.misc.arcstats.size
   ```
 
-  where `N = hw.ncpu` (learned from the same output), run through `proc_open` with an argv array,
-  no shell, and a **strict 2 s deadline** (then SIGKILL; FR-016, SC-005);
-  2. after a **~500 ms** sleep, one short call requesting `kern.cp_time` only, for the second
-  CPU-delta sample (R-04), with the same argv/no-shell/2 s deadline form. No other process is
-  ever launched. The output of each call is parsed
+  run through `proc_open` with an argv array, no shell, and a **strict 1 s deadline** (then
+  SIGKILL; FR-016, SC-005);
+  2. after a **~500 ms** sleep, one short call requesting `kern.cp_time` (for the second
+  CPU-delta sample, R-04) **plus the `dev.cpu.<i>.temperature` OIDs for `i = 0…N−1`** (R-05).
+  The temperature list is built from `N = hw.ncpu`, which is only known once the **first** call has
+  returned — the per-core OIDs cannot be requested in call 1 — so the second call carries both the
+  `cp_time` delta and the per-core temperatures. Same argv/no-shell/1 s deadline form. No other
+  process is ever launched. The output of each call is parsed
   **by name**: each line is `name: value`. `-i` ignores unknown OIDs, so on the verified UFS test
   box `kstat.zfs.misc.arcstats.size` is simply absent from the output — **a missing OID means that
-  value is absent/unavailable; it is never an error** (R-04, R-05). If the call itself exits
-  non-zero (or times out), every value sourced from it is `null` in one step (R-06, FR-013).
-  The OID list is built from a fixed array plus a `dev.cpu.<i>.temperature` entry per core — no
-  user or network input enters argv, so command injection is impossible.
+  value is absent/unavailable; it is never an error** (R-04, R-05). If a call itself exits
+  non-zero (or times out), every value sourced from **that** call is `null` in one step (R-06,
+  FR-013) — a call-2 failure therefore nulls the CPU value and the temperature together. The
+  call-1 list is a fixed array; the call-2 list appends one `dev.cpu.<i>.temperature` entry per
+  core — no user or network input enters argv, so command injection is impossible.
   - **VM-verify**: the exact `-i` behaviour on a **ZFS** install (all OIDs, including the ARC
     one, present; exit 0) — the test box is UFS, so the ZFS path is unit-test-only for now (R-12).
     Fallback if `-i` on this FreeBSD differs: the parser is tolerant by design — unknown/skipped
@@ -81,8 +87,9 @@ slice's packaging, naming, language baseline and ACL (R-10).
 - **Rationale**: One bounded call per read set is the cheapest correct way to get every
   sysctl-sourced value:
   no per-value process (the first draft's per-value `proc_open` readers each paid process-creation
-  cost and needed per-value deadlines; the second, short `kern.cp_time`-only call is the only
-  additional launch and exists solely for the delta), no `sensors`/`top`/`vmstat`/`df` at all, and the `-i`
+  cost and needed per-value deadlines; the second, short `kern.cp_time` + per-core-temperature call
+  is the only additional launch and exists for the CPU delta and the sensor readings), no
+  `sensors`/`top`/`vmstat`/`df` at all, and the `-i`
   missing-OID semantics map directly onto FR-007/FR-012 (absent → null or omitted, never error).
 - **Alternatives considered**: Per-value `sysctl -n` calls (rejected: N processes for N values,
   more deadlines to enforce, for the same data). `vmstat`/`top`/`sensors` (rejected: they are
@@ -96,11 +103,12 @@ slice's packaging, naming, language baseline and ACL (R-10).
   - `kern.boottime` → `{ sec = N, usec = N } <date string>`; take **`sec`** as the boot Unix time.
   - `vm.loadavg` → `{ a b c }`; the three numbers are the 1/5/15-minute averages (R-08).
   - `kern.cp_time` → five tick counters in the order **user nice sys intr idle** (verified).
-  - CPU usage: take two `kern.cp_time` samples **~500 ms apart** (the reader issues the single
-    `sysctl -i` call, sleeps ~500 ms, then a second `sysctl -i` call for `kern.cp_time` only), and
-    compute `usage = 100 × (Δuser + Δnice + Δsys + Δintr) / Δtotal_ticks`, clamped to `0..100`
-    (R-04, FR-004). Two calls for the delta is still one *kind* of bounded call; each side keeps
-    the 2 s deadline, so the CPU value is the slowest one at ~3 s worst case (R-06).
+  - CPU usage: take two `kern.cp_time` samples **~500 ms apart** (the reader issues the full
+    `sysctl -i` call, sleeps ~500 ms, then a second `sysctl -i` call for `kern.cp_time` plus the
+    per-core temperatures, R-03). The reader returns the **two raw samples**; the CPU percentage
+    is computed from their delta by `FirewallStatusAssembler` (R-08), clamped to `0..100`
+    (FR-004). Two calls for the delta is still one *kind* of bounded call; each keeps the 1 s
+    deadline, so the CPU value is the slowest at ~2.5 s worst case (R-06).
   - Memory (FR-005, verified): `memory_total = hw.physmem`;
     `memory_used = (v_page_count − v_free_count − v_inactive_count − v_laundry_count) ×
     hw.pagesize − ARC`, where `ARC = kstat.zfs.misc.arcstats.size` **if the OID is present, else 0**
@@ -124,7 +132,8 @@ slice's packaging, naming, language baseline and ACL (R-10).
 ## R-05 CPU temperature source (verified on the test box)
 
 - **Decision**: `cpu_temperature = max(dev.cpu.0.temperature … dev.cpu.(N−1).temperature)` parsed
-  from the same `sysctl -i` output — values like `67.0C`. `dev.cpu.N.temperature` exists when the
+  from the **second** `sysctl -i` call's output (the per-core OIDs are requested there, R-03) —
+  values like `67.0C`. `dev.cpu.N.temperature` exists when the
   `coretemp` (or `k8temp`) kld is loaded, which it **is on the test box**; on the N6005 baseline it
   reports real readings, so the row shows on the test box (M2 in [quickstart.md](./quickstart.md)
   asserts the real reading). `hw.acpi.thermal.*` is **not** used — it reports a bogus 0.1 °C on
@@ -142,15 +151,15 @@ slice's packaging, naming, language baseline and ACL (R-10).
 ## R-06 Bound, deadline, and degradation mapping (FR-016)
 
 - **Decision**: The read has exactly two external components: the bounded `sysctl -i` call(s) with
-  a strict **2 s deadline** each (R-03, R-04), and a **~500 ms sample gap** between the two
+  a strict **1 s deadline** each (R-03, R-04), and a **~500 ms sample gap** between the two
   `kern.cp_time` samples. No other process is ever launched (version = file read, hostname =
   syscall, disk = PHP stat built-ins — all in-process, bounded by PHP's own limits). If a `sysctl`
-  call times out or exits non-zero, every value sourced from it is `null` in one step; a value
-  whose individual OID is missing from a successful call is `null` for exactly that value
+  call times out or exits non-zero, every value sourced from **that** call is `null` in one step;
+  a value whose individual OID is missing from a successful call is `null` for exactly that value
   (temperature is the special "omit entirely" case, R-05). `null` → "unavailable" in the view
   (FR-012); **all** values `null` → `all_unavailable = true` → the single discreet notice
-  (FR-013). Worst-case added latency per response ≈ 3 s (two 2 s-deadline calls + the 500 ms gap,
-  serial worst case; the normal path is the first call's runtime plus the gap), bounded, so it
+  (FR-013). Worst-case added latency per response ≈ **2.5 s** (two 1 s-deadline calls + the 500 ms
+  gap, serial; the normal path is ≈ 0.6 s), bounded, so it
   adds no unbounded or parallel-process cost to the refresh (SC-005).
 - **Rationale**: FR-016 requires that an unresponsive source cannot stall the shared refresh cycle.
   One strict deadline on each launched `sysctl` call, plus in-process reads that cannot hang, is the
@@ -165,7 +174,8 @@ slice's packaging, naming, language baseline and ACL (R-10).
 - **Decision**:
   - `version`: parse `/usr/local/opnsense/version/core` — a small JSON file holding
     `CORE_PRODUCT` and `CORE_VERSION` among its keys — with `file_get_contents()` + `json_decode()`;
-    the display value is `"CORE_PRODUCT CORE_VERSION"` (e.g. `26.7.7`). Unreadable or invalid file
+    the display value is `"OPNsense CORE_VERSION"` (`CORE_PRODUCT` + " " + `CORE_VERSION`, e.g.
+    `"OPNsense 26.7.7"`). Unreadable or invalid file
     → `version = null` → "unavailable" (FR-012). No process is launched for it.
   - `disk_used` / `disk_total` for the root disk: `disk_total_space('/')` and
     `disk_free_space('/')` (PHP stat built-ins; `disk_used = disk_total − disk_free`);
@@ -181,21 +191,26 @@ slice's packaging, naming, language baseline and ACL (R-10).
   already holds). `df /` parsing (rejected: a process and a locale-sensitive format for what PHP
   returns natively).
 
-## R-08 The `firewall` API object and the two pure classes
+## R-08 The `firewall` API object and the two new classes
 
 - **Decision**:
-  - `PRSWS\CasaDelta\Lib\FirewallTelemetryReader` (**pure**): owns the read — it runs the bounded
-    `sysctl -i` calls (full OID set; the short `kern.cp_time`-only delta call), parses `name: value` lines **by name** (R-03), derives the CPU delta
-    (R-04), the version string and the disk figures (R-07), and returns one `FirewallTelemetry`
+  - `PRSWS\CasaDelta\Lib\FirewallTelemetryReader` (the **I/O boundary with an injectable command
+    runner**): owns the read — it runs the bounded
+    `sysctl -i` calls (full OID set; the short `kern.cp_time` + per-core-temperature call, R-03),
+    parses `name: value` lines **by name** (R-03), returns the **two raw `kern.cp_time` samples**
+    (the CPU delta is computed by the assembler, R-04) plus the version string and the disk figures
+    (R-07) into one `FirewallTelemetry`
     value object (data-model §1) whose fields are real values or `null`. The `sysctl` invocation
     (argv array + deadline) and the sample gap are injectable seams so the whole read is
     unit-testable on the dev machine with captured real `sysctl` outputs.
   - `PRSWS\CasaDelta\Lib\FirewallStatusAssembler` (**pure**): takes a `FirewallTelemetry` and
-    produces the display-ready `FirewallStatus` object (data-model §2): the FR-005 memory
+    produces the display-ready `FirewallStatus` object (data-model §2): the CPU percentage from the
+    two `kern.cp_time` samples (R-04), the FR-005 memory
     definition, the FR-008 warning rules (`memory` / `disk` / `load`, never on a `null` value),
     `cpu_temperature_present` (omitted vs unreadable, FR-007), `all_unavailable` (FR-013) and the
     `collected_at` stamp. See [contracts/firewall-api.md](./contracts/firewall-api.md).
-- **Rationale**: Keeping the parse + math + policy in two framework-free pure classes makes the
+- **Rationale**: Keeping the parse in the I/O boundary and the math + policy in a framework-free
+  pure assembler makes the
   warning/no-false-positive behaviour (SC-002), the ZFS-vs-UFS memory behaviour (Edge Case: large
   ZFS cache) and the degradation behaviour (FR-012/FR-013) deterministic and covered by PHPUnit on
   the dev machine — no appliance needed (Principle VIII) — and gives the controller a single
@@ -223,13 +238,16 @@ slice's packaging, naming, language baseline and ACL (R-10).
   3. **Manual checklist (test VM)**: [quickstart.md](./quickstart.md) — the full panel, each
      threshold crossing/clearing, a forced unreadable value, all-unavailable, and the zero-host /
      all-hosts-down cases.
-  - **Fault injection (test-only switch)**: the readers are pure, so `chmod 000`-style external
+  - **Fault injection (marker files, test-only)**: the reader is the I/O boundary, so `chmod 000`-style external
     breakage is a poor integration seam on the VM — the OPNsense web process runs as root and
-    ignores file permissions. Instead `FirewallTelemetryReader` honours an optional, off-by-default
-    fault-injection switch (env/config variable) that simulates source failure: `sysctl` timeout or
-    non-zero exit, or a failed version-file read. The switch is absent in production builds and
-    documented in [quickstart.md](./quickstart.md) §4 (M10/M11/M14), where it drives the
-    FR-012/FR-013 degradation checks end to end.
+    ignores file permissions. Instead `FirewallTelemetryReader` checks, at the start of each read,
+    for a marker file per source — `/tmp/casadelta_dashboard_fault_sysctl`, `..._fault_version`,
+    `..._fault_disk`, and `..._fault_all` — and, **only if one is present**, simulates that
+    source's failure (`sysctl` timeout or non-zero exit, or a failed version-file / disk read).
+    The markers ship inactive (the files do not exist), are created by the test operator on the VM
+    to drive a degradation check, and are removed by the existing `+POST_DEINSTALL`
+    `/tmp/casadelta_dashboard_*` glob. Documented in [quickstart.md](./quickstart.md) §4
+    (M10/M11/M14), where they drive the FR-012/FR-013 degradation checks end to end.
 - **Rationale**: The pure classes carry every decision in this document, so the dev-machine suite
   proves the ZFS/UFS split, the thresholds and the degradation; only the appliance's live wiring
   (controller call, view render, ACL) needs the VM.
@@ -264,7 +282,7 @@ slice's packaging, naming, language baseline and ACL (R-10).
   firewall side are independent within the response: a firewall read failure never touches
   `summary`/`groups` (FR-017) and vice versa. There is no parallel `proc_open` pool and no
   cross-check deduplication — the two data paths simply run in the one request.
-- **Rationale**: The in-process firewall read (worst case ~3 s, bounded, R-06) serially inside the
+- **Rationale**: The in-process firewall read (worst case ≈ 2.5 s, bounded, R-06) serially inside the
   response is acceptable for ≤ 10 concurrent viewers (SC-005) and removes every piece of the first
   draft's latency machinery: the 15 s deadline, the parallel pool, the two-snapshot interaction and
   the "second refresh within 5 s" cross-check cooldown.

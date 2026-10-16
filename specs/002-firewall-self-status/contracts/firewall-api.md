@@ -15,11 +15,12 @@ not repeated here).
 **exactly as slice 001 does** (snapshot read, stale/forced decision, `check_hosts` via the
 unchanged path, 30 s budget) and then reads firewall telemetry **in-process** through
 `FirewallTelemetryReader` (R-02): bounded `/sbin/sysctl -i` calls — one for the full OID set and
-one short `kern.cp_time`-only delta call, each with a strict 2 s deadline and a ~500 ms gap
+one short `kern.cp_time` + per-core-temperature call (the per-core OIDs are built from the
+`hw.ncpu` returned by the first call), each with a strict 1 s deadline and a ~500 ms gap
 between the two `cp_time` samples — plus in-process reads for the version, hostname
 and disk values (R-03…R-07). There is **no new configd action, no backend script, no snapshot file
 and no parallel `proc_open` pool** — the firewall object is freshly computed for every response,
-with a worst-case added latency of ~3 s, bounded (SC-005). The hosts side and the firewall side
+with a worst-case added latency of ~2.5 s (normal ≈ 0.6 s), bounded (SC-005). The hosts side and the firewall side
 are independent: a firewall read failure never affects `summary`/`groups` and vice versa (FR-017).
 
 ---
@@ -38,7 +39,7 @@ are independent: a firewall read failure never affects `summary`/`groups` and vi
   "groups": [ "…unchanged from slice 001…" ],
   "firewall": {
     "hostname": "firewall01",
-    "version": "26.7.6",
+    "version": "OPNsense 26.7.7",
     "uptime_s": 842133,
     "last_boot": "2026-10-10T20:37:40Z",
     "load_avg_1m": 0.31, "load_avg_5m": 0.48, "load_avg_15m": 0.52,
@@ -61,7 +62,7 @@ even when every host is `down` (FR-017, SC-004).
 
 ```json
 "firewall": {
-  "hostname": "firewall01", "version": "26.7.6", "uptime_s": 842133,
+  "hostname": "firewall01", "version": "OPNsense 26.7.7", "uptime_s": 842133,
   "last_boot": "2026-10-10T20:37:40Z",
   "load_avg_1m": 0.31, "load_avg_5m": 0.48, "load_avg_15m": 0.52, "cpu_cores": 4,
   "cpu_usage_percent": null,

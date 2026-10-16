@@ -17,9 +17,11 @@ Two ephemeral objects make up this slice:
 
 ## 1. `FirewallTelemetry` (ephemeral value object, produced once per read)
 
-The raw result of the in-process read performed by the pure `FirewallTelemetryReader`
-([research R-03…R-07](./research.md)): bounded `/sbin/sysctl -i` calls parsed **by name** (one full
-OID set, plus a short `kern.cp_time`-only call for the CPU delta, R-03/R-04), the OPNsense version
+The raw result of the in-process read performed by the `FirewallTelemetryReader` (the I/O boundary
+with an injectable command runner;
+[research R-03…R-07](./research.md)): bounded `/sbin/sysctl -i` calls parsed **by name** (one full
+OID set, plus a short `kern.cp_time` + per-core-temperature call for the CPU delta and sensor
+readings, R-03/R-04), the OPNsense version
 file, and PHP disk built-ins. Each field is a real value or `null`. For fields sourced from the
 `sysctl` calls,
 `null` means the OID was **absent** or the call **failed** — never an error (R-03). The only
@@ -29,7 +31,7 @@ special case is temperature, where `null` can mean "OID absent" or "read failed"
 | Field                  | Type         | Notes                                                                 |
 |------------------------|--------------|-----------------------------------------------------------------------|
 | `hostname`             | string\|null | `gethostname()` (the `kern.hostname` OID in the `sysctl` output is a fallback). |
-| `version`              | string\|null | `"CORE_PRODUCT CORE_VERSION"` parsed from the JSON file `/usr/local/opnsense/version/core`. |
+| `version`              | string\|null | `"OPNsense CORE_VERSION"` (`CORE_PRODUCT` + " " + `CORE_VERSION`) parsed from the JSON file `/usr/local/opnsense/version/core` (e.g. `"OPNsense 26.7.7"`). |
 | `last_boot`            | int\|null     | Unix time — the `sec` of `kern.boottime` (`{ sec = N, usec = N } <date>`). |
 | `uptime_s`             | int\|null     | `now − last_boot`, whole seconds (computed by the reader).             |
 | `load_avg_1m`          | float\|null | The three numbers of `vm.loadavg` (`{ a b c }`).                       |
@@ -37,8 +39,7 @@ special case is temperature, where `null` can mean "OID absent" or "read failed"
 | `load_avg_15m`         | float\|null |                                                                      |
 | `cpu_cores`            | int\|null     | `hw.ncpu` (logical). The load-warning basis.                          |
 | `cp_time_before`       | 5 ints\|null  | First `kern.cp_time` sample: **user nice sys intr idle**.             |
-| `cp_time_after`        | 5 ints\|null  | Second `kern.cp_time` sample, taken **~500 ms after the first** (R-04). |
-| `cpu_usage_percent`    | float\|null | Delta of the two samples, `0..100` (R-04). `null` if either sample is absent or the call failed. |
+| `cp_time_after`        | 5 ints\|null  | Second `kern.cp_time` sample, taken **~500 ms after the first** (R-04). The second call also carries the per-core `dev.cpu.<i>.temperature` OIDs (R-03). |
 | `memory_total`         | int\|null     | Bytes, `hw.physmem`.                                                  |
 | `v_page_count`         | int\|null     | `vm.stats.vm.v_page_count` (pages).                                   |
 | `v_free_count`         | int\|null     | `vm.stats.vm.v_free_count` (pages, reclaimable).                      |
@@ -54,6 +55,9 @@ special case is temperature, where `null` can mean "OID absent" or "read failed"
 **Validation rules** (from FR-002…FR-008):
 
 - Byte fields are non-negative integers; percentages are clamped to `0 ≤ x ≤ 100`.
+- The reader normalizes negative computed counts to `0` (defensive; a healthy system never
+  produces one) — `memory_used` is clamped to `≥ 0` (FR-005); the assembler then clamps the
+  percentage to `0..100`.
 - A `null` metric is never counted for any percentage or warning.
 
 ---
@@ -61,7 +65,7 @@ special case is temperature, where `null` can mean "OID absent" or "read failed"
 ## 2. `FirewallStatus` (ephemeral, the display-ready object)
 
 Produced per request by the pure `FirewallStatusAssembler` from a `FirewallTelemetry`
-([research R-08](./research.md#r-08-the-firewall-api-object-and-the-two-pure-classes)). This is
+([research R-08](./research.md#r-08-the-firewall-api-object-and-the-two-new-classes)). This is
 the object the API returns in the `firewall` key and the Volt view renders.
 
 | Field               | Type        | Derivation / notes                                                   |
@@ -74,7 +78,7 @@ the object the API returns in the `firewall` key and the Volt view renders.
 | `load_avg_5m`       | float\|null | Displayed with 2 decimals.                                           |
 | `load_avg_15m`      | float\|null | Displayed with 2 decimals.                                           |
 | `cpu_cores`         | int\|null     |                                                                      |
-| `cpu_usage_percent` | float\|null | From telemetry; displayed with 1 decimal and a `%`.                 |
+| `cpu_usage_percent` | float\|null | Computed by the assembler from the two `kern.cp_time` samples (R-04); `null` if either sample is `null`. Displayed with 1 decimal and a `%`. |
 | `memory_used`       | int\|null     | Derived bytes (FR-005). `null` → "unavailable".                     |
 | `memory_total`      | int\|null     | Bytes, `hw.physmem`. The view formats used/total with the percentage. |
 | `memory_used_percent` | float\|null | Derived; drives the memory warning (FR-008).                        |
@@ -103,8 +107,9 @@ disk_used_percent  = (disk_used / disk_total) × 100             (clamped 0..100
   filesystem types: on UFS it reduces to the conventional "used"; a large ZFS ARC is subtracted
   and therefore *reclaimable*, never counting toward the 90% warning (Edge Case: large ZFS cache,
   FR-005).
-- `cpu_usage_percent` comes from the reader (the two `kern.cp_time` samples, R-04); the assembler
-  only clamps and passes it through.
+- `cpu_usage_percent` is computed by the assembler from the two raw `kern.cp_time` samples the
+  reader returns (R-04): `100 × (Δuser + Δnice + Δsys + Δintr) / Δtotal_ticks`, clamped to
+  `0..100`; `null` if either sample is `null`.
 
 **Warning rules (FR-008, fixed — FR-009)**:
 

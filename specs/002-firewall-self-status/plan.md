@@ -20,10 +20,12 @@ reuses the slice 001 `page-casadelta-status` privilege; there is no new privileg
 
 **Technical approach** (see [research.md](./research.md)):
 
-- **Telemetry read in-process**: a new **pure** library class
-  `PRSWS\CasaDelta\Lib\FirewallTelemetryReader` performs **bounded calls to `/sbin/sysctl -i`** —
-  one for the full OID set and a short `kern.cp_time`-only delta call (argv array, no shell,
-  strict 2 s deadline each, never in parallel) — plus PHP built-ins
+- **Telemetry read in-process**: a new library class
+  `PRSWS\CasaDelta\Lib\FirewallTelemetryReader` — the I/O boundary with an injectable command
+  runner — performs **bounded calls to `/sbin/sysctl -i`** —
+  one for the full OID set and a short `kern.cp_time` + per-core-temperature call for the CPU
+  delta and sensor readings (argv array, no shell,
+  strict 1 s deadline each, never in parallel) — plus PHP built-ins
   (`gethostname()`, a `file_get_contents()` read of the OPNsense core version file,
   `disk_total_space('/')` / `disk_free_space('/')`). `Api\StatusController::buildStatus()` calls it
   directly; there is **no new configd action, no backend script, no daemon** (R-02, FR-011, FR-015).
@@ -36,7 +38,7 @@ reuses the slice 001 `page-casadelta-status` privilege; there is no new privileg
   its existing `GET /api/casadelta/status/get` and `POST .../refresh` responses, and the existing
   `status.volt` renders the Firewall panel at the top. Access is inherited from
   `page-casadelta-status` (FR-014).
-- **Graceful degradation**: the sysctl call is bounded by a strict 2 s deadline (FR-016); each
+- **Graceful degradation**: the sysctl call is bounded by a strict 1 s deadline (FR-016); each
   requested OID is parsed by name, so a missing OID (or a failed call) makes exactly that value
   `null` ("unavailable") — never an error, never a warning source. CPU temperature whose OIDs the
   hardware does not report is omitted entirely (FR-007); a fully unreadable read shows a single
@@ -50,17 +52,17 @@ reuses the slice 001 `page-casadelta-status` privilege; there is no new privileg
 
 **Storage**: **None.** No persistent configuration (thresholds are fixed; FR-009), no `/tmp` files, no lock, no snapshot, no configd state. The only runtime state is one in-memory telemetry object per API response, discarded when the request ends. Slice 001's `/tmp` snapshot files and its `+POST_DEINSTALL.post` hook are unchanged.
 
-**Testing**: PHPUnit (dev-only Composer dependency) for the two new pure library classes, including both a ZFS case (ARC present) and a UFS case (ARC absent). `curl`/`jq` contract tests against the test VM API. A manual checklist on the test VM (R-09, R-12, [quickstart.md](./quickstart.md)).
+**Testing**: PHPUnit (dev-only Composer dependency) for the two new library classes (the I/O-boundary reader, the pure assembler), including both a ZFS case (ARC present) and a UFS case (ARC absent). `curl`/`jq` contract tests against the test VM API. A manual checklist on the test VM (R-09, R-12, [quickstart.md](./quickstart.md)).
 
 **Target Platform**: OPNsense 26.7 on FreeBSD 15 (amd64). Baseline hardware is a 4-core Intel N6005. Minimum supported version: 26.7 (R-10, Technical Constraints). Sources verified on the test box: OPNsense 26.7.7, UFS root, `coretemp` loaded (R-03).
 
 **Project Type**: An OPNsense plugin (MVC web module) in an `opnsense/plugins`-style tree, extending the `os-casadelta-dashboard` package from slice 001 — **no new configd action or backend script in this slice**.
 
-**Performance Goals**: Firewall telemetry is produced by two bounded, serial `/sbin/sysctl -i` calls (one full OID set, one short `kern.cp_time`-only delta; strict 2 s deadline each; the missing OIDs skipped are simply absent values) plus a ~500 ms sample gap and in-process file/stat reads — a worst-case read of roughly 3 s. Every status response performs such an in-process read, bounded, so it adds no unbounded latency to the host refresh; the hosts `check_hosts` path keeps slice 001's own budgets (SC-005). The panel loads with complete values within 3 s of page load on baseline hardware (SC-001).
+**Performance Goals**: Firewall telemetry is produced by two bounded, serial `/sbin/sysctl -i` calls (one full OID set, one short `kern.cp_time` + per-core-temperature call; strict 1 s deadline each; the missing OIDs skipped are simply absent values) plus a ~500 ms sample gap and in-process file/stat reads — a worst-case read of ~2.5 s (1 + 0.5 + 1; normal ≈ 0.6 s). Every status response performs such an in-process read, bounded, so it adds no unbounded latency to the host refresh; the hosts `check_hosts` path keeps slice 001's own budgets (SC-005). The panel loads with complete values well within the spec's 3 s budget (SC-001) on baseline hardware.
 
-**Constraints**: The bounded `sysctl` calls (full OID set, then the short `kern.cp_time` delta, serial) each have a strict 2 s deadline; any value whose source is missing or whose call failed degrades to `null` for exactly that value (FR-012, FR-016). No shared snapshot file, no `/tmp` writes, no lock, no daemon, no new configd action, no parallel process pool. A test-only fault-injection switch (R-09) exists in the reader and is inactive by default; it is never enabled in production. Read-only toward all firewall networking configuration. Negligible aggregate CPU/memory on baseline hardware (Principle II). No CDN, no new package dependency.
+**Constraints**: The bounded `sysctl` calls (full OID set, then the short `kern.cp_time` + per-core-temperature call, serial) each have a strict 1 s deadline; any value whose source is missing or whose call failed degrades to `null` for exactly that value (FR-012, FR-016). No shared snapshot file, no `/tmp` writes, no lock, no daemon, no new configd action, no parallel process pool. Fault injection is a per-source marker file under `/tmp/casadelta_dashboard_fault_` (R-09) that the reader checks only if present — it ships inactive and is removed by the existing `+POST_DEINSTALL` glob. Read-only toward all firewall networking configuration. Negligible aggregate CPU/memory on baseline hardware (Principle II). No CDN, no new package dependency.
 
-**Scale/Scope**: A homelab firewall. Two new pure library classes in `library/PRSWS/CasaDelta/Lib/`, one new API object (`firewall`) in the existing status endpoints, one new panel in the existing status page, one new unit-test surface plus one integration test script. No new privileges, no new URLs, no new model container, no new configd entry, no new `/tmp` file. Bounded for the ≤ 10 concurrent viewers inherited from slice 001.
+**Scale/Scope**: A homelab firewall. Two new library classes in `library/PRSWS/CasaDelta/Lib/` (the I/O-boundary reader, the pure assembler), one new API object (`firewall`) in the existing status endpoints, one new panel in the existing status page, one new unit-test surface plus one integration test script. No new privileges, no new URLs, no new model container, no new configd entry, no new `/tmp` file. Bounded for the ≤ 10 concurrent viewers inherited from slice 001.
 
 ## Constitution Check
 
@@ -69,7 +71,7 @@ reuses the slice 001 `page-casadelta-status` privilege; there is no new privileg
 | # | Principle | Gate question | Pre-research | Post-design | Evidence |
 |---|-----------|---------------|--------------|-------------|----------|
 | I | Firewall-native | Built only from plugin framework parts (model, API, Volt, menu, ACL, configd)? No standalone web root or system-file edits? Leaves no residue beyond its config section? | PASS | PASS | R-02, R-10. All new files sit in the package tree (`library/PRSWS/CasaDelta/Lib`, the API controller, `status.volt`). There is **no new configd action** in `actions_casadelta.conf` (the slice 001 `[check_hosts]` entry is untouched) and **no new `/tmp` files**, so the slice 001 `+POST_DEINSTALL.post` hook needs no extension. No system files, no web-root changes, no base PHP edits. |
-| II | Firewall must not be harmed | Read-only toward rules/interfaces/routes/NAT? Strict timeout, bounded concurrency, minimum interval? No permanent daemon? Negligible overhead? | PASS | PASS | [firewall-api.md](./contracts/firewall-api.md). Every read is local and read-only: bounded `/sbin/sysctl -i` calls (argv array, no shell, 2 s deadline each, serial — no parallel processes), one version-file read, PHP stat built-ins (R-03, R-06). Nothing is written, no process pool, no daemon. At most two ~2 s serial bounded reads per response is CPU-negligible on the N6005. |
+| II | Firewall must not be harmed | Read-only toward rules/interfaces/routes/NAT? Strict timeout, bounded concurrency, minimum interval? No permanent daemon? Negligible overhead? | PASS | PASS | [firewall-api.md](./contracts/firewall-api.md). Every read is local and read-only: bounded `/sbin/sysctl -i` calls (argv array, no shell, 1 s deadline each, serial — no parallel processes), one version-file read, PHP stat built-ins (R-03, R-06). Nothing is written, no process pool, no daemon. At most two ~1 s serial bounded reads per response is CPU-negligible on the N6005. |
 | III | Self-sufficient | All assets local? No runtime dependency on another LAN host? Graceful degradation? | PASS | PASS | Telemetry is read from the firewall's own OS, in-process (R-02) — strictly more self-sufficient than slice 001, which needs the LAN. UI uses only GUI-bundled assets ([ui-firewall.md](./contracts/ui-firewall.md)). Unreadable values and an all-failed read degrade to "unavailable" / a single notice rather than breaking the panel (FR-012, FR-013). |
 | IV | Configuration lives in the firewall | Settings in the model / config.xml, edited via GUI or API, in backups? No `.env`? No secrets? | PASS | PASS | This slice adds no configuration at all (thresholds are fixed, FR-009), so there is nothing to persist, back up, or leak. It holds no secrets and creates no runtime file in `/tmp` or anywhere else (R-02, R-10). |
 | V | Firewall identity & least privilege | Uses OPNsense users and ACLs only? View and manage distinct? | PASS | PASS | The panel and the `firewall` API object are served from the existing `/ui/casadelta/status` and `/api/casadelta/status/*` URLs, which are already gated by `page-casadelta-status` (slice 001 [acl-menu.md](../001-host-status-monitoring/contracts/acl-menu.md)). No new privilege, no new URL pattern, so the existing access matrix applies unchanged (FR-014). |
@@ -88,10 +90,13 @@ a Complexity Tracking entry. Design notes that refine the spec without contradic
   mandates, not a deviation.
 - **CPU usage from counter deltas**: current CPU usage is the delta of two `kern.cp_time` samples
   taken ~500 ms apart; the first sample comes from the one full `sysctl -i` call, the second from
-  a short follow-up `sysctl -i` call requesting `kern.cp_time` only (R-03, R-04). This replaces
+  a short follow-up `sysctl -i` call requesting `kern.cp_time` plus the per-core `dev.cpu.<i>.temperature` OIDs
+  (the per-core list is built from `hw.ncpu` returned by the first call — R-03, R-04, R-05). This
+  replaces
   the first draft's 1-second `vmstat`/`top` sample and its parallel `proc_open` pool, keeping the
   whole read well within the SC-001/SC-005 budgets.
-- **Temperature source**: `dev.cpu.N.temperature` per core (max), verified present on the test box
+- **Temperature source**: `dev.cpu.N.temperature` per core (max), read in the second `sysctl -i`
+  call; verified present on the test box
   (`coretemp` loaded). `hw.acpi.thermal.*` is deliberately **not** used — it reports a bogus 0.1 °C on
   this hardware (R-05).
 - **ARC term**: `kstat.zfs.misc.arcstats.size` exists only on ZFS installations; the test box has a UFS
@@ -127,8 +132,8 @@ net-mgmt/casadelta-dashboard/
             │   └── Api/
             │       └── StatusController.php  # EXTENDED: host logic unchanged; buildStatus() gains an in-process FirewallTelemetryReader read and adds `firewall` to the response body
             ├── library/PRSWS/CasaDelta/Lib/
-            │   ├── FirewallTelemetryReader.php   # NEW (pure): bounded `sysctl -i` calls (full set + cp_time delta), per-OID parsing, version file, disk built-ins
-            │   └── FirewallStatusAssembler.php   # NEW (pure): CPU-delta, memory, disk percentages, thresholds/warnings, availability, the `firewall` object
+            │   ├── FirewallTelemetryReader.php   # NEW (I/O boundary, injectable runner): bounded `sysctl -i` calls (full set; then cp_time + per-core temps), per-OID parsing, version file, disk built-ins
+            │   └── FirewallStatusAssembler.php   # NEW (pure): CPU-delta %, memory, disk percentages, thresholds/warnings, availability, the `firewall` object
             └── views/PRSWS/CasaDelta/
                 └── status.volt               # EXTENDED: renders the Firewall panel above #cd-groups, updates in place on the same poll/refresh
         (no scripts/CasaDelta entry and no new action in service/conf/actions.d/actions_casadelta.conf)
@@ -145,8 +150,8 @@ phpunit.xml.dist                             # unchanged
 ```
 
 **Structure Decision**: This slice extends the slice 001 package in place rather than adding a new
-mount point, URL, model container, privilege, configd action, or `/tmp` file. The two new pure
-classes live in the same `mvc/app/library/PRSWS/CasaDelta/Lib/` directory (already PSR-4 mapped in
+mount point, URL, model container, privilege, configd action, or `/tmp` file. The two new classes
+live in the same `mvc/app/library/PRSWS/CasaDelta/Lib/` directory (already PSR-4 mapped in
 `composer.json` and autoloaded by `autoload.php`), so their unit tests run on the dev machine with
 no appliance. The **only** slice-001 files modified are the API controller and the status view, and
 both changes are additive: the `check_hosts` path (configd action, script, snapshot,
