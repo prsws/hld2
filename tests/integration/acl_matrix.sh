@@ -44,17 +44,23 @@ check_endpoint() {
 echo "ACL matrix against $BASE_URL"
 
 # Status endpoints: 200 for view only and both, 403 for settings only and neither
-check_endpoint "GET /ui/casadelta/status" GET /ui/casadelta/status 200 403 200 403
 check_endpoint "GET /api/casadelta/status/get" GET /api/casadelta/status/get 200 403 200 403
 check_endpoint "POST /api/casadelta/status/refresh" POST /api/casadelta/status/refresh 200 403 200 403 '{}'
 
 # Settings endpoints: 403 for view only and neither, 200 for settings only and both
-check_endpoint "GET /ui/casadelta/settings" GET /ui/casadelta/settings 403 200 200 403
 check_endpoint "GET/POST searchHost" POST /api/casadelta/settings/searchHost 403 200 200 403 '{"current":1,"rowCount":1}'
 check_endpoint "POST addHost" POST /api/casadelta/settings/addHost 403 200 200 403 "$INVALID_ADD"
 check_endpoint "POST setHost" POST "/api/casadelta/settings/setHost/$NO_UUID" 403 200 200 403 "$INVALID_ADD"
 check_endpoint "POST delHost" POST "/api/casadelta/settings/delHost/$NO_UUID" 403 200 200 403 '{}'
 check_endpoint "POST toggleHost" POST "/api/casadelta/settings/toggleHost/$NO_UUID/0" 403 200 200 403 '{}'
+
+# GUI pages: OPNsense accepts API key/secret only on /api/*. A /ui/* request without a GUI login
+# session is redirected to the login page (302) for every user, so per-privilege access to the
+# pages themselves is verified manually (slice 001 quickstart M12, slice 002 M13). Here we only
+# assert that an API key never opens a GUI page. The ACL patterns for /ui and /api are defined
+# together per privilege (ACL.xml), so the /api rows above cover the privilege logic.
+check_endpoint "GET /ui/casadelta/status (API key -> login redirect)" GET /ui/casadelta/status 302 302 302 302
+check_endpoint "GET /ui/casadelta/settings (API key -> login redirect)" GET /ui/casadelta/settings 302 302 302 302
 
 # Explicit cross-privilege guarantees
 echo "cross-privilege guarantees"
