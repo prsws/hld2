@@ -50,7 +50,7 @@ These close small gaps in the plan. They are binding for implementation; change 
 
 - [ ] T001 [P] In `PKG/Makefile` set `PLUGIN_VERSION` to `0.2.0`. In `PKG/pkg-descr` add one sentence about the Firewall panel to the description and a `0.2.0` changelog entry above `0.1.0` ("Firewall panel on the Host Status page: hostname, version, uptime, load, CPU, memory, disk, CPU temperature when reported; fixed warning thresholds"). Keep "Requires OPNsense 26.7 or later" (R-10)
 - [ ] T002 [P] Extend `PKG/+POST_DEINSTALL.post` to also `rm -f` the four fault markers `/tmp/casadelta_dashboard_fault_sysctl`, `/tmp/casadelta_dashboard_fault_version`, `/tmp/casadelta_dashboard_fault_disk` and `/tmp/casadelta_dashboard_fault_all` (keep the three slice 001 lines unchanged). Then correct the docs that call the hook "unchanged" or a "glob": research.md R-09 and R-10, plan.md (Storage, the `+POST_DEINSTALL.post` line in Source Code, Constitution Check row I) and quickstart.md M17 — the hook now names the marker files explicitly (Decision 1)
-- [ ] T003 [P] Create `tests/fixtures/firewall/` with a `README.md` stating which files are captured from the test instance and which are synthetic
+- [X] T003 [P] Create `tests/fixtures/firewall/` with a `README.md` stating which files are captured from the test instance and which are synthetic
 
 **Checkpoint**: Version bump and uninstall cleanup in place.
 
@@ -60,12 +60,13 @@ These close small gaps in the plan. They are binding for implementation; change 
 
 **Purpose**: Unit tests parse real output, not invented output. Run on the **test instance (192.168.1.1) only**. Start `sh` first (the root shell is tcsh).
 
-- [ ] T004 On the test instance, capture into `tests/fixtures/firewall/`:
+- [X] T004 On the test instance, capture into `tests/fixtures/firewall/`:
   - `sysctl_call1_ufs.txt`: output of `/sbin/sysctl -i kern.hostname kern.boottime vm.loadavg hw.ncpu kern.cp_time hw.physmem hw.pagesize vm.stats.vm.v_page_count vm.stats.vm.v_free_count vm.stats.vm.v_inactive_count vm.stats.vm.v_laundry_count kstat.zfs.misc.arcstats.size` (record that the exit code is 0 and that the ARC line is absent)
   - `sysctl_call2.txt`: output of `/sbin/sysctl -i kern.cp_time dev.cpu.0.temperature dev.cpu.1.temperature dev.cpu.2.temperature dev.cpu.3.temperature`, taken about 0.5 s after call 1
   - `version_core.json`: contents of `/usr/local/opnsense/version/core`
-  - `sysctl_call1_zfs.txt` (**synthetic**, marked in the README): a copy of the UFS capture plus one line `kstat.zfs.misc.arcstats.size: <bytes>`, with a value large enough that raw used memory is above 90% but used memory minus ARC is well below it (for the large-ARC test, Edge Case "Large ZFS cache")
+  - `sysctl_call1_zfs.txt` (**synthetic**, marked in the README): the UFS capture with `v_free_count` lowered and one line `kstat.zfs.misc.arcstats.size: <bytes>` added, so that raw used memory is above 90% but used memory minus ARC is well below it (for the large-ARC test, Edge Case "Large ZFS cache")
   - `sysctl_call2_nosensor.txt` (**synthetic**): the call 2 capture with every `dev.cpu.N.temperature` line removed
+  - `sysctl_call2_mixed.txt` (**synthetic**): the call 2 capture with different per-core temperatures (all four cores read the same value on the test box), for the maximum test
 
 **Checkpoint**: Fixtures committed. Unit tests may start.
 
@@ -96,7 +97,7 @@ These close small gaps in the plan. They are binding for implementation; change 
   - `kern.boottime` → `last_boot` = the `sec` value; `uptime_s` = clock − `last_boot`
   - `vm.loadavg` `{ a b c }` → three floats; `kern.cp_time` → five ints for `cp_time_before` (call 1) and `cp_time_after` (call 2)
   - `hw.physmem`, `hw.pagesize` and the four `vm.stats.vm.v_*` counts are parsed as ints; the UFS fixture gives `memory_arc_bytes = 0`; the ZFS fixture gives the ARC value
-  - temperatures `67.0C` / `56.0C` … → `cpu_temperature` = the maximum as a float, `cpu_temperature_present = true`; `hw.acpi.thermal.*` is never requested (R-05)
+  - with `sysctl_call2_mixed.txt` (`67.0C`, `56.0C`, `61.0C`, `58.0C`) → `cpu_temperature` = `67.0`, the maximum as a float; `cpu_temperature_present = true`; `hw.acpi.thermal.*` is never requested (R-05)
   - `version` = `"OPNsense 26.7.7"` built from `CORE_PRODUCT` + `" "` + `CORE_VERSION` (R-07)
   - `hostname` comes from the injected `gethostname`; when that returns `false` or an empty string it falls back to the `kern.hostname` line (R-07)
   - `disk_total` / `disk_free` come from the injected disk functions for path `/`
